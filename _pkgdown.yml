@@ -1,0 +1,38 @@
+url: https://lemaitreh.g²ithub.io/ggsegAal/
+
+template:
+  package: ggseg.docs
+  bootstrap: 5
+
+home:
+  title: "ggsegAAL"
+  description: >
+    Automated Anatomical Labeling atlases
+    for the ggsegverse ecosystem.
+
+navbar:
+  structure:
+    left: [intro, reference, news]
+    right: [search, github]
+
+  components:
+    github:
+      icon: fa-github
+      href: https://github.com/lemaitreh/ggsegAal
+      aria-label: GitHub
+
+reference:
+  - title: "AAL Atlases"
+    desc: >
+      Cortical, subcortical and cerebellar
+      atlases for AAL1, AAL2 and AAL3.
+    contents:
+      - aal_atlases
+
+  - title: "3D Visualization"
+    contents:
+      - ggseg3d_aal
+
+  - title: "Package"
+    contents:
+      - ggsegAAL-package

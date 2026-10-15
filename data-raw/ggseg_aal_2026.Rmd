@@ -1,0 +1,2701 @@
+---
+title: "ggseg aal 2026"
+output: html_document
+date: "2026-09-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# ggseg and aal atlases
+
+## 1. Objectives
+
+Creating a new ggseg package with the AAL atlases (AAL1, AAL2 and AAL3)  
+https://ggsegverse.github.io/ggseg.extra/  
+
+AAL1: 82 cortical + 8 subcortical + 26 cerebellar = 116 regions
+AAL2: 86 cortical (orbitofrontal) + 8 subcortical + 26 cerebellar = 120 regions
+AAL3: 90 cortical (anterior cingulate) + 50 subcortical (thalamus) + 26 cerebellar = 166 regions
+
+The original ggseg3dAAL package had only 2*41 regions based on the AAL2 version and reported in https://pubmed.ncbi.nlm.nih.gov/28412442/ (see Supplementary Material 3).  
+https://github.com/ggseg/ggsegAal  
+
+Compared to AAL3 version:  
+- Missing OFClat (31,32), N = 2  
+- Missing Amygdala (45,46), N = 2  
+- Missing Basal ganglia (75-82), N = 6  
+- Missing Cerebellum (95-120), N = 26  
+- Missing Thalamus subdivision (121-150), N = 30  
+- Missing ACC subdivision (151-156), N = 6  
+- Missing Subnuclei (157-170), N = 14 
+
+ggseg3dAAL has also a problem with shifted region from 9 to 15 labels:  
+https://github.com/ggseg/ggsegAal/issues/4#issuecomment-3588275084
+
+People were asking for AAL freesurfer surface:  
+https://github.com/faskowit/multiAtlasTT/issues/8
+
+New ggseg extra procedure:  
+https://github.com/ggsegverse/ggseg.extra  
+
+Old ggseg extra procedure:  
+The instruction for creating a subcortical atlas are here:  
+https://ggseg.github.io/ggsegExtra/articles/createaseg.html
+The command make_volumetric_2_3datlas has an issue (https://github.com/ggseg/ggsegExtra/issues/34).  
+
+## 2. Anatomical surface reconstruction of colin27 
+
+ Cortical representations will use the Colin27 surface:  
+- Download the colin27 at 1mm resolution (https://www.bic.mni.mcgill.ca/ServicesAtlases/Colin27).  
+- Register the colin27 to the single_subj_T1.  
+- Process colin27 with recon-all to get the colin27 surface.  
+
+```{bash, eval=F}
+module load fsl/6.0.7
+module load Freesurfer/8.1.0
+
+
+# Estimate transform
+flirt -in colin27_t1_tal_lin.nii -ref single_subj_T1.nii \
+      -dof 6 -cost corratio \
+      -omat mov2fix_rigid.mat
+# Apply transform
+flirt -in colin27_t1_tal_lin.nii -ref colin27_t1_tal_lin.nii \
+      -applyxfm -init mov2fix_rigid.mat \
+      -out colin27_t1_tal_lin_reg.nii
+
+# recon-all
+recon-all -i  /data/extra/hlemaitre/aal/raw/colins27/colin27_t1_tal_lin_reg.nii.gz -s colin27_t1_tal_lin_reg -all
+```
+
+## 3. Cortical and subcortical AAL parcellations
+
+Create AAL parcellations for cortical regions by hemisphere, basal ganglia with contextual cortex, and cerebellum.  
+
+### a. AAL3
+
+Download AAL3v2 (https://www.gin.cnrs.fr/fr/outils/aal/):    
+
+```{bash, eval=F}
+################################################################################
+
+module load fsl/6.0.7
+module load Freesurfer/8.1.0
+export SUBJECTS_DIR=/data/extra/hlemaitre/aal/freesurfer
+
+# paths
+AAL3ORIG="/data/extra/hlemaitre/aal/raw/aal3/"
+AAL3DIR="/data/extra/hlemaitre/aal/raw/aal3_cortical_subcortical/"
+mkdir $AAL3DIR
+
+# images 2mm
+AAL3SPM=${AAL3ORIG}AAL3v1.nii.gz
+AAL3PARC=${AAL3DIR}AAL3v1_free.nii.gz
+AAL3OUT_COR_MASK=${AAL3DIR}AAL3v1_cortex_mask.nii.gz
+AAL3OUT_SUB_MASK=${AAL3DIR}AAL3v1_sub_mask.nii.gz
+AAL3OUT_BG_MASK=${AAL3DIR}AAL3v1_bg_mask.nii.gz
+AAL3OUT_CER_MASK=${AAL3DIR}AAL3v1_cer_mask.nii.gz
+AAL3OUT_COR=${AAL3DIR}AAL3v1_cortex.nii.gz
+AAL3OUT_L=${AAL3DIR}AAL3v1_cortex_L.nii.gz
+AAL3OUT_R=${AAL3DIR}AAL3v1_cortex_R.nii.gz
+AAL3OUT_SUB=${AAL3DIR}AAL3v1_sub.nii.gz
+AAL3OUT_BG=${AAL3DIR}AAL3v1_bg.nii.gz
+AAL3OUT_CER=${AAL3DIR}AAL3v1_cer.nii.gz
+AAL3OUT_BG_CONTEXT=${AAL3DIR}AAL3v1_bg_context.nii.gz
+
+# transform into freesurfer space
+mri_vol2vol --mov ${AAL3SPM} --targ $SUBJECTS_DIR/colin27_t1_tal_lin_reg/mri/T1.mgz --regheader --o ${AAL3PARC} --interp nearest
+
+# start with empty mask
+fslmaths "$AAL3PARC" -mul 0 "$AAL3OUT_COR_MASK"
+fslmaths "$AAL3PARC" -mul 0 "$AAL3OUT_SUB_MASK"
+fslmaths "$AAL3PARC" -mul 0 "$AAL3OUT_BG_MASK"
+fslmaths "$AAL3PARC" -mul 0 "$AAL3OUT_CER_MASK"
+
+# Cortical regions
+# N = 36+6+3 = 45 regions/hemisphere (no Cingulate_Ant anymore)
+COR="1-34 37-74 83-94 151-156"
+
+for s in $COR; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL3PARC" -thr $a -uthr $b -bin -add "$AAL3OUT_COR_MASK" "$AAL3OUT_COR_MASK"
+  else
+    fslmaths "$AAL3PARC" -thr $s -uthr $s -bin -add "$AAL3OUT_COR_MASK" "$AAL3OUT_COR_MASK"
+  fi
+done
+
+# Subcortical regions
+# N = 76 (no Thalamus anymore)
+SUB="75-80 95-150 157-170"
+
+for s in $SUB; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL3PARC" -thr $a -uthr $b -bin -add "$AAL3OUT_SUB_MASK" "$AAL3OUT_SUB_MASK"
+  else
+    fslmaths "$AAL3PARC" -thr $s -uthr $s -bin -add "$AAL3OUT_SUB_MASK" "$AAL3OUT_SUB_MASK"
+  fi
+done
+
+# Basal ganglia regions
+# N = 50 (no Thalamus anymore)
+BG="75-80 121-150 157-170"
+
+for s in $BG; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL3PARC" -thr $a -uthr $b -bin -add "$AAL3OUT_BG_MASK" "$AAL3OUT_BG_MASK"
+  else
+    fslmaths "$AAL3PARC" -thr $s -uthr $s -bin -add "$AAL3OUT_BG_MASK" "$AAL3OUT_BG_MASK"
+  fi
+done
+
+# Cerebellum regions
+# N = 26 
+CER="95-120"
+for s in $CER; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL3PARC" -thr $a -uthr $b -bin -add "$AAL3OUT_CER_MASK" "$AAL3OUT_CER_MASK"
+  else
+    fslmaths "$AAL3PARC" -thr $s -uthr $s -bin -add "$AAL3OUT_CER_MASK" "$AAL3OUT_CER_MASK"
+  fi
+ done
+
+# clean binary masks
+fslmaths "$AAL3OUT_COR_MASK" -bin "$AAL3OUT_COR_MASK"
+fslmaths "$AAL3OUT_SUB_MASK" -bin "$AAL3OUT_SUB_MASK"
+fslmaths "$AAL3OUT_BG_MASK" -bin "$AAL3OUT_BG_MASK"
+fslmaths "$AAL3OUT_CER_MASK" -bin "$AAL3OUT_CER_MASK"
+
+# apply masks (keep original values)
+fslmaths "$AAL3PARC" -mas "$AAL3OUT_COR_MASK" "$AAL3OUT_COR"
+fslmaths "$AAL3PARC" -mas "$AAL3OUT_SUB_MASK" "$AAL3OUT_SUB"
+fslmaths "$AAL3PARC" -mas "$AAL3OUT_BG_MASK" "$AAL3OUT_BG"
+fslmaths "$AAL3PARC" -mas "$AAL3OUT_CER_MASK" "$AAL3OUT_CER"
+fslmaths "$AAL3OUT_COR_MASK" -add "$AAL3OUT_BG" "$AAL3OUT_BG_CONTEXT"
+fslmaths "$AAL3OUT_COR_MASK" -add "$AAL3OUT_CER" "$AAL3OUT_CER_CONTEXT"
+
+# right hemisphere
+fslmaths "$AAL3OUT_COR" -rem 2 -add 1 -uthr 1 -bin -mas "$AAL3OUT_COR_MASK" -mul "$AAL3OUT_COR" "$AAL3OUT_R"
+
+# left hemisphere
+fslmaths "$AAL3OUT_COR" -rem 2 -add 1 -thr 2 -uthr 2 -bin -mas "$AAL3OUT_COR_MASK" -mul "$AAL3OUT_COR" "$AAL3OUT_L"
+
+################################################################################
+```
+
+### b. AAL2
+
+Download AAL2 (https://www.gin.cnrs.fr/fr/outils/aal/):  
+
+```{bash, eval=F}
+################################################################################
+
+module load fsl/6.0.7
+module load Freesurfer/8.1.0
+export SUBJECTS_DIR=/data/extra/hlemaitre/aal/freesurfer
+
+# paths
+AAL2ORIG="/data/extra/hlemaitre/aal/raw/aal2/"
+AAL2DIR="/data/extra/hlemaitre/aal/raw/aal2_cortical_subcortical/"
+mkdir $AAL2DIR
+
+# images
+AAL2SPM=${AAL2ORIG}aal2.nii.gz
+AAL2PARC=${AAL2DIR}aal2_free.nii.gz
+AAL2OUT_COR_MASK=${AAL2DIR}aal2_cortex_mask.nii.gz
+AAL2OUT_SUB_MASK=${AAL2DIR}aal2_sub_mask.nii.gz
+AAL2OUT_BG_MASK=${AAL2DIR}aal2_bg_mask.nii.gz
+AAL2OUT_CER_MASK=${AAL2DIR}aal2_cer_mask.nii.gz
+AAL2OUT_COR=${AAL2DIR}aal2_cortex.nii.gz
+AAL2OUT_L=${AAL2DIR}aal2_cortex_L.nii.gz
+AAL2OUT_R=${AAL2DIR}aal2_cortex_R.nii.gz
+AAL2OUT_SUB=${AAL2DIR}aal2_sub.nii.gz
+AAL2OUT_BG=${AAL2DIR}aal2_bg.nii.gz
+AAL2OUT_CER=${AAL2DIR}aal2_cer.nii.gz
+AAL2OUT_BG_CONTEXT=${AAL2DIR}aal2_bg_context.nii.gz
+
+
+# transform into freesurfer space
+mri_vol2vol --mov ${AAL2SPM} --targ $SUBJECTS_DIR/colin27_t1_tal_lin_reg/mri/T1.mgz --regheader --o ${AAL2PARC} --interp nearest
+
+# start with empty mask
+fslmaths "$AAL2PARC" -mul 0 "$AAL2OUT_COR_MASK"
+fslmaths "$AAL2PARC" -mul 0 "$AAL2OUT_SUB_MASK"
+fslmaths "$AAL2PARC" -mul 0 "$AAL2OUT_BG_MASK"
+fslmaths "$AAL2PARC" -mul 0 "$AAL2OUT_CER_MASK"
+
+# Cortical regions
+# N = 86, 43 per hemisphere
+COR="1-74 83-94"
+
+for s in $COR; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL2PARC" -thr $a -uthr $b -bin -add "$AAL2OUT_COR_MASK" "$AAL2OUT_COR_MASK"
+  else
+    fslmaths "$AAL2PARC" -thr $s -uthr $s -bin -add "$AAL2OUT_COR_MASK" "$AAL2OUT_COR_MASK"
+  fi
+done
+
+# Subcortical regions
+# N = 34
+SUB="75-82 95-120"
+
+for s in $SUB; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL2PARC" -thr $a -uthr $b -bin -add "$AAL2OUT_SUB_MASK" "$AAL2OUT_SUB_MASK"
+  else
+    fslmaths "$AAL2PARC" -thr $s -uthr $s -bin -add "$AAL2OUT_SUB_MASK" "$AAL2OUT_SUB_MASK"
+  fi
+done
+
+# Basal ganglia regions
+# N = 8
+BG="75-82"
+
+for s in $BG; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL2PARC" -thr $a -uthr $b -bin -add "$AAL2OUT_BG_MASK" "$AAL2OUT_BG_MASK"
+  else
+    fslmaths "$AAL2PARC" -thr $s -uthr $s -bin -add "$AAL2OUT_BG_MASK" "$AAL2OUT_BG_MASK"
+  fi
+done
+
+# Cerebellum regions
+# N = 26
+CER="95-120"
+for s in $CER; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL2PARC" -thr $a -uthr $b -bin -add "$AAL2OUT_CER_MASK" "$AAL2OUT_CER_MASK"
+  else
+    fslmaths "$AAL2PARC" -thr $s -uthr $s -bin -add "$AAL2OUT_CER_MASK" "$AAL2OUT_CER_MASK"
+  fi
+done
+
+# clean binary masks
+fslmaths "$AAL2OUT_COR_MASK" -bin "$AAL2OUT_COR_MASK"
+fslmaths "$AAL2OUT_SUB_MASK" -bin "$AAL2OUT_SUB_MASK"
+fslmaths "$AAL2OUT_BG_MASK" -bin "$AAL2OUT_BG_MASK"
+#fslmaths "$AAL2OUT_CER_MASK" -bin "$AAL2OUT_CER_MASK"
+
+# apply masks (keep original values)
+fslmaths "$AAL2PARC" -mas "$AAL2OUT_COR_MASK" "$AAL2OUT_COR"
+fslmaths "$AAL2PARC" -mas "$AAL2OUT_SUB_MASK" "$AAL2OUT_SUB"
+fslmaths "$AAL2PARC" -mas "$AAL2OUT_BG_MASK" "$AAL2OUT_BG"
+fslmaths "$AAL2PARC" -mas "$AAL2OUT_CER_MASK" "$AAL2OUT_CER"
+fslmaths "$AAL2OUT_COR_MASK" -add "$AAL2OUT_BG" "$AAL2OUT_BG_CONTEXT"
+fslmaths "$AAL2OUT_COR_MASK" -add "$AAL2OUT_CER" "$AAL2OUT_CER_CONTEXT"
+
+# right hemisphere
+fslmaths "$AAL2OUT_COR" -rem 2 -add 1 -uthr 1 -bin -mas "$AAL2OUT_COR_MASK" -mul "$AAL2OUT_COR" "$AAL2OUT_R"
+
+# left hemisphere
+fslmaths "$AAL2OUT_COR" -rem 2 -add 1 -thr 2 -uthr 2 -bin -mas "$AAL2OUT_COR_MASK" -mul "$AAL2OUT_COR" "$AAL2OUT_L"
+
+################################################################################
+```
+
+### c. AAL1
+
+Download AAL1 (https://www.gin.cnrs.fr/fr/outils/aal/):  
+
+Converting the original AAL1 with four number to two numbers labels:
+
+```{bash, eval=F}
+################################################################################
+
+module load fsl/6.0.7
+
+# Répertoire contenant l'AAL1 original
+AAL1ORIG="/data/extra/hlemaitre/aal/raw/aal/"
+
+ATLAS="${AAL1ORIG}/ROI_MNI_V4.nii"
+LUT="${AAL1ORIG}/ROI_MNI_V4.txt"
+
+OUT="${AAL1ORIG}/AAL1_116.nii.gz"
+OUTLUT="${AAL1ORIG}/AAL1_116.txt"
+
+# Initialise le nouvel atlas à zéro
+fslmaths "$ATLAS" -mul 0 "$OUT"
+
+# Initialise la nouvelle LUT
+> "$OUTLUT"
+
+i=1
+
+while read -r abbrev name oldcode
+do
+    # Ignore les lignes vides
+    [ -z "$oldcode" ] && continue
+
+    echo "$oldcode -> $i   $name"
+
+    # Sélection exacte du label original
+    fslmaths "$ATLAS" \
+        -thr "$oldcode" \
+        -uthr "$oldcode" \
+        -bin \
+        -mul "$i" \
+        "${AAL1ORIG}/tmp_label"
+
+    # Ajout au nouvel atlas
+    fslmaths "$OUT" \
+        -add "${AAL1ORIG}/tmp_label" \
+        "$OUT"
+
+    # Nouvelle LUT :
+    # nouveau_code  nom  ancien_code
+    printf "%d\t%s\t%d\n" \
+        "$i" "$name" "$oldcode" >> "$OUTLUT"
+
+    i=$((i+1))
+
+done < "$LUT"
+
+# Nettoyage
+rm -f "${AAL1ORIG}/tmp_label.nii.gz"
+
+echo
+echo "Atlas créé : $OUT"
+echo "LUT créée   : $OUTLUT"
+echo "Nombre de labels : $((i-1))"
+
+echo
+echo "Plage des valeurs :"
+fslstats "$OUT" -R
+# 0.000000 116.000000
+
+################################################################################
+```
+
+```{bash, eval=F}
+################################################################################
+
+module load fsl/6.0.7
+module load Freesurfer/8.1.0
+export SUBJECTS_DIR=/data/extra/hlemaitre/aal/freesurfer
+
+# paths
+AAL1ORIG="/data/extra/hlemaitre/aal/raw/aal/"
+AAL1DIR="/data/extra/hlemaitre/aal/raw/aal_cortical_subcortical/"
+mkdir $AAL1DIR
+
+# images
+AAL1SPM=${AAL1ORIG}AAL1_116.nii.gz
+AAL1PARC=${AAL1DIR}AAL1_116_free.nii.gz
+AAL1OUT_COR_MASK=${AAL1DIR}AAL1_116_cortex_mask.nii.gz
+AAL1OUT_SUB_MASK=${AAL1DIR}AAL1_116_sub_mask.nii.gz
+AAL1OUT_BG_MASK=${AAL1DIR}AAL1_116_bg_mask.nii.gz
+AAL1OUT_CER_MASK=${AAL1DIR}AAL1_116_cer_mask.nii.gz
+AAL1OUT_COR=${AAL1DIR}AAL1_116_cortex.nii.gz
+AAL1OUT_L=${AAL1DIR}AAL1_116_cortex_L.nii.gz
+AAL1OUT_R=${AAL1DIR}AAL1_116_cortex_R.nii.gz
+AAL1OUT_SUB=${AAL1DIR}AAL1_116_sub.nii.gz
+AAL1OUT_BG=${AAL1DIR}AAL1_116_bg.nii.gz
+AAL1OUT_CER=${AAL1DIR}AAL1_116_cer.nii.gz
+AAL1OUT_BG_CONTEXT=${AAL1DIR}AAL1_116_bg_context.nii.gz
+
+# transform into freesurfer space
+mri_vol2vol --mov ${AAL1SPM} --targ $SUBJECTS_DIR/colin27_t1_tal_lin_reg/mri/T1.mgz --regheader --o ${AAL1PARC} --interp nearest
+
+# start with empty mask
+fslmaths "$AAL1PARC" -mul 0 "$AAL1OUT_COR_MASK"
+fslmaths "$AAL1PARC" -mul 0 "$AAL1OUT_SUB_MASK"
+fslmaths "$AAL1PARC" -mul 0 "$AAL1OUT_BG_MASK"
+fslmaths "$AAL1PARC" -mul 0 "$AAL1OUT_CER_MASK"
+
+# Cortical regions
+# N = 82, 41 regions per hemisphere
+COR="1-70 79-90"
+
+for s in $COR; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL1PARC" -thr $a -uthr $b -bin -add "$AAL1OUT_COR_MASK" "$AAL1OUT_COR_MASK"
+  else
+    fslmaths "$AAL1PARC" -thr $s -uthr $s -bin -add "$AAL1OUT_COR_MASK" "$AAL1OUT_COR_MASK"
+  fi
+done
+
+# Subcortical regions
+# N = 34
+SUB="71-78 91-116"
+
+for s in $SUB; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL1PARC" -thr $a -uthr $b -bin -add "$AAL1OUT_SUB_MASK" "$AAL1OUT_SUB_MASK"
+  else
+    fslmaths "$AAL1PARC" -thr $s -uthr $s -bin -add "$AAL1OUT_SUB_MASK" "$AAL1OUT_SUB_MASK"
+  fi
+done
+
+# Basal ganglia regions
+# N = 8
+BG="71-78"
+
+for s in $BG; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL1PARC" -thr $a -uthr $b -bin -add "$AAL1OUT_BG_MASK" "$AAL1OUT_BG_MASK"
+  else
+    fslmaths "$AAL1PARC" -thr $s -uthr $s -bin -add "$AAL1OUT_BG_MASK" "$AAL1OUT_BG_MASK"
+  fi
+done
+
+# Cerebellum regions
+# N = 26
+
+CER="91-116"
+for s in $CER; do
+  if [[ "$s" =~ ^[0-9]+-[0-9]+$ ]]; then
+    a=${s%-*}
+    b=${s#*-}
+    fslmaths "$AAL1PARC" -thr $a -uthr $b -bin -add "$AAL1OUT_CER_MASK" "$AAL1OUT_CER_MASK"
+  else
+    fslmaths "$AAL1PARC" -thr $s -uthr $s -bin -add "$AAL1OUT_CER_MASK" "$AAL1OUT_CER_MASK"
+  fi
+done
+
+# clean binary masks
+fslmaths "$AAL1OUT_COR_MASK" -bin "$AAL1OUT_COR_MASK"
+fslmaths "$AAL1OUT_SUB_MASK" -bin "$AAL1OUT_SUB_MASK"
+fslmaths "$AAL1OUT_BG_MASK" -bin "$AAL1OUT_BG_MASK"
+fslmaths "$AAL1OUT_CER_MASK" -bin "$AAL1OUT_CER_MASK"
+
+# apply masks (keep original values)
+fslmaths "$AAL1PARC" -mas "$AAL1OUT_COR_MASK" "$AAL1OUT_COR"
+fslmaths "$AAL1PARC" -mas "$AAL1OUT_SUB_MASK" "$AAL1OUT_SUB"
+fslmaths "$AAL1PARC" -mas "$AAL1OUT_BG_MASK" "$AAL1OUT_BG"
+fslmaths "$AAL1PARC" -mas "$AAL1OUT_CER_MASK" "$AAL1OUT_CER"
+fslmaths "$AAL1OUT_COR_MASK" -add "$AAL1OUT_BG" "$AAL1OUT_BG_CONTEXT"
+fslmaths "$AAL1OUT_COR_MASK" -add "$AAL1OUT_CER" "$AAL1OUT_CER_CONTEXT"
+
+# right hemisphere
+fslmaths "$AAL1OUT_COR" -rem 2 -add 1 -uthr 1 -bin -mas "$AAL1OUT_COR_MASK" -mul "$AAL1OUT_COR" "$AAL1OUT_R"
+
+# left hemisphere
+fslmaths "$AAL1OUT_COR" -rem 2 -add 1 -thr 2 -uthr 2 -bin -mas "$AAL1OUT_COR_MASK" -mul "$AAL1OUT_COR" "$AAL1OUT_L"
+
+################################################################################
+```
+
+## 4. Color tables
+
+There is not official lut for AAL. The aal version from MRICro (https://people.cas.sc.edu/rorden/mricro/mricro.html) has a lut for the AAL1 version. It will be adapted for the AAL1, AAL2 and AAL3.  
+
+**read_palette_lut.py**
+```{python, eval=F}
+################################################################################
+from pathlib import Path
+
+lut_path = Path("aal.lut")
+b = lut_path.read_bytes()
+assert len(b) == 768, f"Expected 768 bytes, got {len(b)}"
+
+R = b[0:256]
+G = b[256:512]
+B = b[512:768]
+
+# color for region index i (0..255):
+def color(i):
+    return (R[i], G[i], B[i])
+
+for i in range(1, 117):
+    print(i, color(i))
+################################################################################
+```
+
+**python3 read_palette_lut.py aal.lut**   
+```
+1 (204, 204, 204)
+2 (204, 204, 204)
+3 (203, 149, 149)
+4 (203, 149, 149)
+5 (61, 61, 203)
+6 (61, 61, 203)
+7 (0, 203, 0)
+8 (0, 203, 0)
+9 (162, 0, 54)
+10 (162, 0, 54)
+11 (162, 54, 13)
+12 (162, 54, 13)
+13 (0, 94, 92)
+14 (0, 94, 92)
+15 (203, 203, 3)
+16 (203, 203, 3)
+17 (162, 0, 56)
+18 (162, 0, 56)
+19 (162, 81, 203)
+20 (162, 81, 203)
+21 (0, 0, 0)
+22 (0, 0, 0)
+23 (0, 0, 0)
+24 (0, 0, 0)
+25 (0, 0, 0)
+26 (0, 0, 0)
+27 (0, 0, 0)
+28 (0, 0, 0)
+29 (0, 0, 0)
+30 (0, 0, 0)
+31 (203, 203, 108)
+32 (203, 203, 108)
+33 (198, 198, 2)
+34 (198, 198, 2)
+35 (184, 148, 39)
+36 (184, 148, 39)
+37 (203, 203, 0)
+38 (203, 203, 0)
+39 (13, 176, 67)
+40 (13, 176, 67)
+41 (203, 142, 203)
+42 (203, 142, 203)
+43 (0, 152, 64)
+44 (0, 152, 64)
+45 (54, 54, 203)
+46 (54, 54, 203)
+47 (149, 203, 203)
+48 (149, 203, 203)
+49 (140, 36, 42)
+50 (140, 36, 42)
+51 (152, 69, 47)
+52 (152, 69, 47)
+53 (94, 69, 54)
+54 (94, 69, 54)
+55 (38, 0, 83)
+56 (38, 0, 83)
+57 (81, 0, 176)
+58 (81, 0, 176)
+59 (76, 47, 127)
+60 (76, 47, 127)
+61 (0, 135, 203)
+62 (0, 135, 203)
+63 (0, 0, 0)
+64 (0, 0, 0)
+65 (94, 17, 76)
+66 (94, 17, 76)
+67 (94, 13, 13)
+68 (94, 13, 13)
+69 (94, 0, 26)
+70 (94, 0, 26)
+71 (122, 203, 67)
+72 (122, 203, 67)
+73 (72, 72, 200)
+74 (72, 72, 200)
+75 (203, 102, 0)
+76 (203, 102, 0)
+77 (0, 203, 203)
+78 (0, 203, 203)
+79 (128, 102, 0)
+80 (128, 102, 0)
+81 (203, 53, 0)
+82 (203, 53, 0)
+83 (191, 23, 23)
+84 (191, 23, 23)
+85 (0, 200, 203)
+86 (0, 200, 203)
+87 (108, 0, 162)
+88 (108, 0, 162)
+89 (0, 200, 0)
+90 (0, 200, 0)
+91 (134, 53, 0)
+92 (134, 53, 0)
+93 (102, 102, 102)
+94 (102, 102, 102)
+95 (8, 8, 8)
+96 (8, 8, 8)
+97 (203, 149, 149)
+98 (203, 149, 149)
+99 (61, 61, 203)
+100 (61, 61, 203)
+101 (0, 203, 0)
+102 (0, 203, 0)
+103 (162, 0, 54)
+104 (162, 0, 54)
+105 (162, 54, 13)
+106 (162, 54, 13)
+107 (0, 94, 92)
+108 (0, 94, 92)
+109 (203, 203, 3)
+110 (203, 203, 3)
+111 (162, 0, 56)
+112 (162, 81, 203)
+113 (0, 0, 0)
+114 (0, 0, 0)
+115 (0, 0, 0)
+116 (0, 0, 0)
+```
+
+### a. AAL3
+
+The AAL3 parcellation version has 170 labels.  
+
+**AAL3v1.nii.txt**:  
+```
+1 Precentral_L 1
+2 Precentral_R 2
+3 Frontal_Sup_2_L 3
+4 Frontal_Sup_2_R 4
+5 Frontal_Mid_2_L 5
+6 Frontal_Mid_2_R 6
+7 Frontal_Inf_Oper_L 7
+8 Frontal_Inf_Oper_R 8
+9 Frontal_Inf_Tri_L 9
+10 Frontal_Inf_Tri_R 10
+11 Frontal_Inf_Orb_2_L 11
+12 Frontal_Inf_Orb_2_R 12
+13 Rolandic_Oper_L 13
+14 Rolandic_Oper_R 14
+15 Supp_Motor_Area_L 15
+16 Supp_Motor_Area_R 16
+17 Olfactory_L 17
+18 Olfactory_R 18
+19 Frontal_Sup_Medial_L 19
+20 Frontal_Sup_Medial_R 20
+21 Frontal_Med_Orb_L 21
+22 Frontal_Med_Orb_R 22
+23 Rectus_L 23
+24 Rectus_R 24
+25 OFCmed_L 25
+26 OFCmed_R 26
+27 OFCant_L 27
+28 OFCant_R 28
+29 OFCpost_L 29
+30 OFCpost_R 30
+31 OFClat_L 31
+32 OFClat_R 32
+33 Insula_L 33
+34 Insula_R 34
+35 Cingulate_Ant_L
+36 Cingulate_Ant_R
+37 Cingulate_Mid_L 37
+38 Cingulate_Mid_R 38
+39 Cingulate_Post_L 39
+40 Cingulate_Post_R 40
+41 Hippocampus_L 41
+42 Hippocampus_R 42
+43 ParaHippocampal_L 43
+44 ParaHippocampal_R 44
+45 Amygdala_L 45
+46 Amygdala_R 46
+47 Calcarine_L 47
+48 Calcarine_R 48
+49 Cuneus_L 49
+50 Cuneus_R 50
+51 Lingual_L 51
+52 Lingual_R 52
+53 Occipital_Sup_L 53
+54 Occipital_Sup_R 54
+55 Occipital_Mid_L 55
+56 Occipital_Mid_R 56
+57 Occipital_Inf_L 57
+58 Occipital_Inf_R 58
+59 Fusiform_L 59
+60 Fusiform_R 60
+61 Postcentral_L 61
+62 Postcentral_R 62
+63 Parietal_Sup_L 63
+64 Parietal_Sup_R 64
+65 Parietal_Inf_L 65
+66 Parietal_Inf_R 66
+67 SupraMarginal_L 67
+68 SupraMarginal_R 68
+69 Angular_L 69
+70 Angular_R 70
+71 Precuneus_L 71
+72 Precuneus_R 72
+73 Paracentral_Lobule_L 73
+74 Paracentral_Lobule_R 74
+75 Caudate_L 75
+76 Caudate_R 76
+77 Putamen_L 77
+78 Putamen_R 78
+79 Pallidum_L 79
+80 Pallidum_R 80
+81 Thalamus_L
+82 Thalamus_R
+83 Heschl_L 83
+84 Heschl_R 84
+85 Temporal_Sup_L 85
+86 Temporal_Sup_R 86
+87 Temporal_Pole_Sup_L 87
+88 Temporal_Pole_Sup_R 88
+89 Temporal_Mid_L 89
+90 Temporal_Mid_R 90
+91 Temporal_Pole_Mid_L 91
+92 Temporal_Pole_Mid_R 92
+93 Temporal_Inf_L 93
+94 Temporal_Inf_R 94
+95 Cerebellum_Crus1_L 95
+96 Cerebellum_Crus1_R 96
+97 Cerebellum_Crus2_L 97
+98 Cerebellum_Crus2_R 98
+99 Cerebellum_3_L 99
+100 Cerebellum_3_R 100
+101 Cerebellum_4_5_L 101
+102 Cerebellum_4_5_R 102
+103 Cerebellum_6_L 103
+104 Cerebellum_6_R 104
+105 Cerebellum_7b_L 105
+106 Cerebellum_7b_R 106
+107 Cerebellum_8_L 107
+108 Cerebellum_8_R 108
+109 Cerebellum_9_L 109
+110 Cerebellum_9_R 110
+111 Cerebellum_10_L 111
+112 Cerebellum_10_R 112
+113 Vermis_1_2 113
+114 Vermis_3 114
+115 Vermis_4_5 115
+116 Vermis_6 116
+117 Vermis_7 117
+118 Vermis_8 118
+119 Vermis_9 119
+120 Vermis_10 120
+121 Thal_AV_L 121
+122 Thal_AV_R 122
+123 Thal_LP_L 123
+124 Thal_LP_R 124
+125 Thal_VA_L 125
+126 Thal_VA_R 126
+127 Thal_VL_L 127
+128 Thal_VL_R 128
+129 Thal_VPL_L 129
+130 Thal_VPL_R 130
+131 Thal_IL_L 131
+132 Thal_IL_R 132
+133 Thal_Re_L 133
+134 Thal_Re_R 134
+135 Thal_MDm_L 135
+136 Thal_MDm_R 136
+137 Thal_MDl_L 137
+138 Thal_MDl_R 138
+139 Thal_LGN_L 139
+140 Thal_LGN_R 140
+141 Thal_MGN_L 141
+142 Thal_MGN_R 142
+143 Thal_PuI_L 143
+144 Thal_PuI_R 144
+145 Thal_PuM_L 145
+146 Thal_PuM_R 146
+147 Thal_PuA_L 147
+148 Thal_PuA_R 148
+149 Thal_PuL_L 149
+150 Thal_PuL_R 150
+151 ACC_sub_L 151
+152 ACC_sub_R 152
+153 ACC_pre_L 153
+154 ACC_pre_R 154
+155 ACC_sup_L 155
+156 ACC_sup_R 156
+157 N_Acc_L 157
+158 N_Acc_R 158
+159 VTA_L 159
+160 VTA_R 160
+161 SN_pc_L 161
+162 SN_pc_R 162
+163 SN_pr_L 163
+164 SN_pr_R 164
+165 Red_N_L 165
+166 Red_N_R 166
+167 LC_L 167
+168 LC_R 168
+169 Raphe_D 169
+170 Raphe_M 170
+```
+Notes:  
+"35 Cingulate_Ant_L" and "36 Cingulate_Ant_R" do not exist has there is an new ACC parcellation now.  
+"81 Thalamus_L" and "82 Thalamus_R" do not exist has there is a new thalamus parcellation now.  
+
+The new lut will be based on MRIcro lut for the cortical and subcortical parcellation with no black (0,0,0). Homologous left/right regions share the same color, while different anatomical regions use distinct colors.  
+
+Change from _L and _R to _left and _right for ggseg functions.  
+
+cortical: 1-34 37-74 83-94 151-156  (N = 45x2 = 90)  
+**/data/extra/hlemaitre/aal/raw/aal3_cortical_subcortical/AAL3v1_cortex.ctab**:  
+```
+1 Precentral_left 204 204 204 0
+2 Precentral_right 204 204 204 0
+3 Frontal_Sup_2_left 203 149 149 0
+4 Frontal_Sup_2_right 203 149 149 0
+5 Frontal_Mid_2_left 0 203 0 0
+6 Frontal_Mid_2_right 0 203 0 0
+7 Frontal_Inf_Oper_left 162 54 13 0
+8 Frontal_Inf_Oper_right 162 54 13 0
+9 Frontal_Inf_Tri_left 0 94 92 0
+10 Frontal_Inf_Tri_right 0 94 92 0
+11 Frontal_Inf_Orb_2_left 203 203 3 0
+12 Frontal_Inf_Orb_2_right 203 203 3 0
+13 Rolandic_Oper_left 162 0 56 0
+14 Rolandic_Oper_right 162 0 56 0
+15 Supp_Motor_Area_left 162 81 203 0
+16 Supp_Motor_Area_right 162 81 203 0
+17 Olfactory_left 1 1 1 0
+18 Olfactory_right 1 1 1 0
+19 Frontal_Sup_Medial_left 2 2 2 0
+20 Frontal_Sup_Medial_right 2 2 2 0
+21 Frontal_Med_Orb_left 3 3 3 0
+22 Frontal_Med_Orb_right 3 3 3 0
+23 Rectus_left 4 4 4 0
+24 Rectus_right 4 4 4 0
+25 OFCmed_left 191 30 30 0
+26 OFCmed_right 191 30 30 0
+27 OFCant_left 152 75 47 0
+28 OFCant_right 152 75 47 0
+29 OFCpost_left 94 69 62 0
+30 OFCpost_right 94 69 62 0
+31 OFClat_left 94 17 76 0
+32 OFClat_right 94 17 76 0
+33 Insula_left 5 5 5 0
+34 Insula_right 5 5 5 0
+37 Cingulate_Mid_left 198 198 2 0
+38 Cingulate_Mid_right 198 198 2 0
+39 Cingulate_Post_left 184 148 39 0
+40 Cingulate_Post_right 184 148 39 0
+41 Hippocampus_left 203 203 0 0
+42 Hippocampus_right 203 203 0 0
+43 ParaHippocampal_left 13 176 67 0
+44 ParaHippocampal_right 13 176 67 0
+45 Amygdala_left 203 142 203 0
+46 Amygdala_right 203 142 203 0
+47 Calcarine_left 0 152 64 0
+48 Calcarine_right 0 152 64 0
+49 Cuneus_left 54 54 203 0
+50 Cuneus_right 54 54 203 0
+51 Lingual_left 149 203 203 0
+52 Lingual_right 149 203 203 0
+53 Occipital_Sup_left 140 36 42 0
+54 Occipital_Sup_right 140 36 42 0
+55 Occipital_Mid_left 152 69 47 0
+56 Occipital_Mid_right 152 69 47 0
+57 Occipital_Inf_left 94 69 54 0
+58 Occipital_Inf_right 94 69 54 0
+59 Fusiform_left 38 0 83 0
+60 Fusiform_right 38 0 83 0
+61 Postcentral_left 81 0 176 0
+62 Postcentral_right 81 0 176 0
+63 Parietal_Sup_left 76 47 127 0
+64 Parietal_Sup_right 76 47 127 0
+65 Parietal_Inf_left 0 135 203 0
+66 Parietal_Inf_right 0 135 203 0
+67 SupraMarginal_left 6 6 6 0
+68 SupraMarginal_right 6 6 6 0
+69 Angular_left 94 13 13 0
+70 Angular_right 94 13 13 0
+71 Precuneus_left 94 0 26 0
+72 Precuneus_right 94 0 26 0
+73 Paracentral_Lobule_left 122 203 67 0
+74 Paracentral_Lobule_right 122 203 67 0
+83 Heschl_left 128 102 0 0
+84 Heschl_right 128 102 0 0
+85 Temporal_Sup_left 203 53 0 0
+86 Temporal_Sup_right 203 53 0 0
+87 Temporal_Pole_Sup_left 191 23 23 0
+88 Temporal_Pole_Sup_right 191 23 23 0
+89 Temporal_Mid_left 0 200 203 0
+90 Temporal_Mid_right 0 200 203 0
+91 Temporal_Pole_Mid_left 108 0 162 0
+92 Temporal_Pole_Mid_right 108 0 162 0
+93 Temporal_Inf_left 0 200 0 0
+94 Temporal_Inf_right 0 200 0 0
+151 ACC_sub_left 184 90 90 0
+152 ACC_sub_right 184 90 90 0
+153 ACC_pre_left 203 120 60 0
+154 ACC_pre_right 203 120 60 0
+155 ACC_sup_left 203 80 120 0
+156 ACC_sup_right 203 80 120 0
+```
+subcortical: 75-80 95-150 157-170 (N = 75)  
+**/data/extra/hlemaitre/aal/raw/aal3_cortical_subcortical/AAL3v1_sub.ctab**:  
+```
+75 Caudate_left 122 203 67 0
+76 Caudate_right 122 203 67 0
+77 Putamen_left 72 72 200 0
+78 Putamen_right 72 72 200 0
+79 Pallidum_left 203 102 0 0
+80 Pallidum_right 203 102 0 0
+95 Cerebellum_Crus1_left 134 53 0 0
+96 Cerebellum_Crus1_right 134 53 0 0
+97 Cerebellum_Crus2_left 102 102 102 0
+98 Cerebellum_Crus2_right 102 102 102 0
+99 Cerebellum_3_left 8 8 8 0
+100 Cerebellum_3_right 8 8 8 0
+101 Cerebellum_4_5_left 203 149 149 0
+102 Cerebellum_4_5_right 203 149 149 0
+103 Cerebellum_6_left 61 61 203 0
+104 Cerebellum_6_right 61 61 203 0
+105 Cerebellum_7b_left 0 203 0 0
+106 Cerebellum_7b_right 0 203 0 0
+107 Cerebellum_8_left 162 0 54 0
+108 Cerebellum_8_right 162 0 54 0
+109 Cerebellum_9_left 162 54 13 0
+110 Cerebellum_9_right 162 54 13 0
+111 Cerebellum_10_left 0 94 92 0
+112 Cerebellum_10_right 0 94 92 0
+113 Vermis_1_2 11 11 11 0
+114 Vermis_3 12 12 12 0
+115 Vermis_4_5 13 13 13 0
+116 Vermis_6 14 14 14 0
+117 Vermis_7 15 15 15 0
+118 Vermis_8 16 16 16 0
+119 Vermis_9 17 17 17 0
+120 Vermis_10 18 18 18 0
+121 Thal_AV_left 0 203 203 0
+122 Thal_AV_right 0 203 203 0
+123 Thal_LP_left 0 200 210 0
+124 Thal_LP_right 0 200 210 0
+125 Thal_VA_left 0 196 203 0
+126 Thal_VA_right 0 196 203 0
+127 Thal_VL_left 0 190 210 0
+128 Thal_VL_right 0 190 210 0
+129 Thal_VPL_left 0 186 203 0
+130 Thal_VPL_right 0 186 203 0
+131 Thal_IL_left 0 180 210 0
+132 Thal_IL_right 0 180 210 0
+133 Thal_Re_left 0 176 203 0
+134 Thal_Re_right 0 176 203 0
+135 Thal_MDm_left 0 170 210 0
+136 Thal_MDm_right 0 170 210 0
+137 Thal_MDl_left 0 166 203 0
+138 Thal_MDl_right 0 166 203 0
+139 Thal_LGN_left 0 160 210 0
+140 Thal_LGN_right 0 160 210 0
+141 Thal_MGN_left 0 156 203 0
+142 Thal_MGN_right 0 156 203 0
+143 Thal_PuI_left 0 150 210 0
+144 Thal_PuI_right 0 150 210 0
+145 Thal_PuM_left 0 146 203 0
+146 Thal_PuM_right 0 146 203 0
+147 Thal_PuA_left 0 140 210 0
+148 Thal_PuA_right 0 140 210 0
+149 Thal_PuL_left 0 136 203 0
+150 Thal_PuL_right 0 136 203 0
+157 N_Acc_left 203 203 0 0
+158 N_Acc_right 203 203 0 0
+159 VTA_left 156 84 203 0
+160 VTA_right 156 84 203 0
+161 SN_pc_left 162 0 56 0
+162 SN_pc_right 162 0 56 0
+163 SN_pr_left 168 92 203 0
+164 SN_pr_right 168 92 203 0
+165 Red_N_left 94 13 13 0
+166 Red_N_right 94 13 13 0
+167 LC_left 94 69 54 0
+168 LC_right 94 69 54 0
+169 Raphe_D 9 9 9 0
+170 Raphe_M 10 10 10 0
+```
+
+### b. AAL2
+
+The AAL2 parcellation version has 120 labels.  
+
+ **aal2.nii.txt:**  
+ ```
+1 Precentral_L 2001
+2 Precentral_R 2002
+3 Frontal_Sup_2_L 2101
+4 Frontal_Sup_2_R 2102
+5 Frontal_Mid_2_L 2201
+6 Frontal_Mid_2_R 2202
+7 Frontal_Inf_Oper_L 2301
+8 Frontal_Inf_Oper_R 2302
+9 Frontal_Inf_Tri_L 2311
+10 Frontal_Inf_Tri_R 2312
+11 Frontal_Inf_Orb_2_L 2321
+12 Frontal_Inf_Orb_2_R 2322
+13 Rolandic_Oper_L 2331
+14 Rolandic_Oper_R 2332
+15 Supp_Motor_Area_L 2401
+16 Supp_Motor_Area_R 2402
+17 Olfactory_L 2501
+18 Olfactory_R 2502
+19 Frontal_Sup_Medial_L 2601
+20 Frontal_Sup_Medial_R 2602
+21 Frontal_Med_Orb_L 2611
+22 Frontal_Med_Orb_R 2612
+23 Rectus_L 2701
+24 Rectus_R 2702
+25 OFCmed_L 2801
+26 OFCmed_R 2802
+27 OFCant_L 2811
+28 OFCant_R 2812
+29 OFCpost_L 2821
+30 OFCpost_R 2822
+31 OFClat_L 2831
+32 OFClat_R 2832
+33 Insula_L 3001
+34 Insula_R 3002
+35 Cingulate_Ant_L 4001
+36 Cingulate_Ant_R 4002
+37 Cingulate_Mid_L 4011
+38 Cingulate_Mid_R 4012
+39 Cingulate_Post_L 4021
+40 Cingulate_Post_R 4022
+41 Hippocampus_L 4101
+42 Hippocampus_R 4102
+43 ParaHippocampal_L 4111
+44 ParaHippocampal_R 4112
+45 Amygdala_L 4201
+46 Amygdala_R 4202
+47 Calcarine_L 5001
+48 Calcarine_R 5002
+49 Cuneus_L 5011
+50 Cuneus_R 5012
+51 Lingual_L 5021
+52 Lingual_R 5022
+53 Occipital_Sup_L 5101
+54 Occipital_Sup_R 5102
+55 Occipital_Mid_L 5201
+56 Occipital_Mid_R 5202
+57 Occipital_Inf_L 5301
+58 Occipital_Inf_R 5302
+59 Fusiform_L 5401
+60 Fusiform_R 5402
+61 Postcentral_L 6001
+62 Postcentral_R 6002
+63 Parietal_Sup_L 6101
+64 Parietal_Sup_R 6102
+65 Parietal_Inf_L 6201
+66 Parietal_Inf_R 6202
+67 SupraMarginal_L 6211
+68 SupraMarginal_R 6212
+69 Angular_L 6221
+70 Angular_R 6222
+71 Precuneus_L 6301
+72 Precuneus_R 6302
+73 Paracentral_Lobule_L 6401
+74 Paracentral_Lobule_R 6402
+75 Caudate_L 7001
+76 Caudate_R 7002
+77 Putamen_L 7011
+78 Putamen_R 7012
+79 Pallidum_L 7021
+80 Pallidum_R 7022
+81 Thalamus_L 7101
+82 Thalamus_R 7102
+83 Heschl_L 8101
+84 Heschl_R 8102
+85 Temporal_Sup_L 8111
+86 Temporal_Sup_R 8112
+87 Temporal_Pole_Sup_L 8121
+88 Temporal_Pole_Sup_R 8122
+89 Temporal_Mid_L 8201
+90 Temporal_Mid_R 8202
+91 Temporal_Pole_Mid_L 8211
+92 Temporal_Pole_Mid_R 8212
+93 Temporal_Inf_L 8301
+94 Temporal_Inf_R 8302
+95 Cerebelum_Crus1_L 9001
+96 Cerebelum_Crus1_R 9002
+97 Cerebelum_Crus2_L 9011
+98 Cerebelum_Crus2_R 9012
+99 Cerebelum_3_L 9021
+100 Cerebelum_3_R 9022
+101 Cerebelum_4_5_L 9031
+102 Cerebelum_4_5_R 9032
+103 Cerebelum_6_L 9041
+104 Cerebelum_6_R 9042
+105 Cerebelum_7b_L 9051
+106 Cerebelum_7b_R 9052
+107 Cerebelum_8_L 9061
+108 Cerebelum_8_R 9062
+109 Cerebelum_9_L 9071
+110 Cerebelum_9_R 9072
+111 Cerebelum_10_L 9081
+112 Cerebelum_10_R 9082
+113 Vermis_1_2 9100
+114 Vermis_3 9110
+115 Vermis_4_5 9120
+116 Vermis_6 9130
+117 Vermis_7 9140
+118 Vermis_8 9150
+119 Vermis_9 9160
+120 Vermis_10 9170
+```
+
+**/data/extra/hlemaitre/aal/raw/aal2_cortical_subcortical/aal2_cortex.ctab**:  
+```
+1 Precentral_L 204 204 204 0
+2 Precentral_R 204 204 204 0
+3 Frontal_Sup_2_L 203 149 149 0
+4 Frontal_Sup_2_R 203 149 149 0
+5 Frontal_Mid_2_L 0 203 0 0
+6 Frontal_Mid_2_R 0 203 0 0
+7 Frontal_Inf_Oper_L 162 54 13 0
+8 Frontal_Inf_Oper_R 162 54 13 0
+9 Frontal_Inf_Tri_L 0 94 92 0
+10 Frontal_Inf_Tri_R 0 94 92 0
+11 Frontal_Inf_Orb_2_L 203 203 3 0
+12 Frontal_Inf_Orb_2_R 203 203 3 0
+13 Rolandic_Oper_L 162 0 56 0
+14 Rolandic_Oper_R 162 0 56 0
+15 Supp_Motor_Area_L 162 81 203 0
+16 Supp_Motor_Area_R 162 81 203 0
+17 Olfactory_L 1 1 1 0
+18 Olfactory_R 1 1 1 0
+19 Frontal_Sup_Medial_L 2 2 2 0
+20 Frontal_Sup_Medial_R 2 2 2 0
+21 Frontal_Med_Orb_L 3 3 3 0
+22 Frontal_Med_Orb_R 3 3 3 0
+23 Rectus_L 4 4 4 0
+24 Rectus_R 4 4 4 0
+25 OFCmed_L 191 30 30 0
+26 OFCmed_R 191 30 30 0
+27 OFCant_L 152 75 47 0
+28 OFCant_R 152 75 47 0
+29 OFCpost_L 94 69 62 0
+30 OFCpost_R 94 69 62 0
+31 OFClat_L 94 17 76 0
+32 OFClat_R 94 17 76 0
+33 Insula_L 5 5 5 0
+34 Insula_R 5 5 5 0
+35 Cingulate_Ant_L 203 203 108 0
+36 Cingulate_Ant_R 203 203 108 0
+37 Cingulate_Mid_L 198 198 2 0
+38 Cingulate_Mid_R 198 198 2 0
+39 Cingulate_Post_L 184 148 39 0
+40 Cingulate_Post_R 184 148 39 0
+41 Hippocampus_L 203 203 0 0
+42 Hippocampus_R 203 203 0 0
+43 ParaHippocampal_L 13 176 67 0
+44 ParaHippocampal_R 13 176 67 0
+45 Amygdala_L 203 142 203 0
+46 Amygdala_R 203 142 203 0
+47 Calcarine_L 0 152 64 0
+48 Calcarine_R 0 152 64 0
+49 Cuneus_L 54 54 203 0
+50 Cuneus_R 54 54 203 0
+51 Lingual_L 149 203 203 0
+52 Lingual_R 149 203 203 0
+53 Occipital_Sup_L 140 36 42 0
+54 Occipital_Sup_R 140 36 42 0
+55 Occipital_Mid_L 152 69 47 0
+56 Occipital_Mid_R 152 69 47 0
+57 Occipital_Inf_L 94 69 54 0
+58 Occipital_Inf_R 94 69 54 0
+59 Fusiform_L 38 0 83 0
+60 Fusiform_R 38 0 83 0
+61 Postcentral_L 81 0 176 0
+62 Postcentral_R 81 0 176 0
+63 Parietal_Sup_L 76 47 127 0
+64 Parietal_Sup_R 76 47 127 0
+65 Parietal_Inf_L 0 135 203 0
+66 Parietal_Inf_R 0 135 203 0
+67 SupraMarginal_L 6 6 6 0
+68 SupraMarginal_R 6 6 6 0
+69 Angular_L 94 13 13 0
+70 Angular_R 94 13 13 0
+71 Precuneus_L 94 0 26 0
+72 Precuneus_R 94 0 26 0
+73 Paracentral_Lobule_L 122 203 67 0
+74 Paracentral_Lobule_R 122 203 67 0
+83 Heschl_L 128 102 0 0
+84 Heschl_R 128 102 0 0
+85 Temporal_Sup_L 203 53 0 0
+86 Temporal_Sup_R 203 53 0 0
+87 Temporal_Pole_Sup_L 191 23 23 0
+88 Temporal_Pole_Sup_R 191 23 23 0
+89 Temporal_Mid_L 0 200 203 0
+90 Temporal_Mid_R 0 200 203 0
+91 Temporal_Pole_Mid_L 108 0 162 0
+92 Temporal_Pole_Mid_R 108 0 162 0
+93 Temporal_Inf_L 0 200 0 0
+94 Temporal_Inf_R 0 200 0 0
+```
+
+**/data/extra/hlemaitre/aal/raw/aal2_cortical_subcortical/aal2_sub.ctab**: 
+```
+75 Caudate_L 122 203 67 0
+76 Caudate_R 122 203 67 0
+77 Putamen_L 72 72 200 0
+78 Putamen_R 72 72 200 0
+79 Pallidum_L 203 102 0 0
+80 Pallidum_R 203 102 0 0
+81 Thalamus_L 0 203 203 0
+82 Thalamus_R 0 203 203 0
+95 Cerebelum_Crus1_L 134 53 0 0
+96 Cerebelum_Crus1_R 134 53 0 0
+97 Cerebelum_Crus2_L 102 102 102 0
+98 Cerebelum_Crus2_R 102 102 102 0
+99 Cerebelum_3_L 8 8 8 0
+100 Cerebelum_3_R 8 8 8 0
+101 Cerebelum_4_5_L 203 149 149 0
+102 Cerebelum_4_5_R 203 149 149 0
+103 Cerebelum_6_L 61 61 203 0
+104 Cerebelum_6_R 61 61 203 0
+105 Cerebelum_7b_L 0 203 0 0
+106 Cerebelum_7b_R 0 203 0 0
+107 Cerebelum_8_L 162 0 54 0
+108 Cerebelum_8_R 162 0 54 0
+109 Cerebelum_9_L 162 54 13 0
+110 Cerebelum_9_R 162 54 13 0
+111 Cerebelum_10_L 0 94 92 0
+112 Cerebelum_10_R 0 94 92 0
+113 Vermis_1_2 11 11 11 0
+114 Vermis_3 12 12 12 0
+115 Vermis_4_5 13 13 13 0
+116 Vermis_6 14 14 14 0
+117 Vermis_7 15 15 15 0
+118 Vermis_8 16 16 16 0
+119 Vermis_9 17 17 17 0
+120 Vermis_10 18 18 18 0
+```
+
+### c. AAL1 
+
+The AAL1 parcellation version has 116 labels.  
+
+**AAL1_116.txt**  
+```
+1 Precentral_L 2001
+2 Precentral_R 2002
+3 Frontal_Sup_L 2101
+4 Frontal_Sup_R 2102
+5 Frontal_Sup_Orb_L 2111
+6 Frontal_Sup_Orb_R 2112
+7 Frontal_Mid_L 2201
+8 Frontal_Mid_R 2202
+9 Frontal_Mid_Orb_L 2211
+10 Frontal_Mid_Orb_R 2212
+11 Frontal_Inf_Oper_L 2301
+12 Frontal_Inf_Oper_R 2302
+13 Frontal_Inf_Tri_L 2311
+14 Frontal_Inf_Tri_R 2312
+15 Frontal_Inf_Orb_L 2321
+16 Frontal_Inf_Orb_R 2322
+17 Rolandic_Oper_L 2331
+18 Rolandic_Oper_R 2332
+19 Supp_Motor_Area_L 2401
+20 Supp_Motor_Area_R 2402
+21 Olfactory_L 2501
+22 Olfactory_R 2502
+23 Frontal_Sup_Medial_L 2601
+24 Frontal_Sup_Medial_R 2602
+25 Frontal_Mid_Orb_L 2611
+26 Frontal_Mid_Orb_R 2612
+27 Rectus_L 2701
+28 Rectus_R 2702
+29 Insula_L 3001
+30 Insula_R 3002
+31 Cingulum_Ant_L 4001
+32 Cingulum_Ant_R 4002
+33 Cingulum_Mid_L 4011
+34 Cingulum_Mid_R 4012
+35 Cingulum_Post_L 4021
+36 Cingulum_Post_R 4022
+37 Hippocampus_L 4101
+38 Hippocampus_R 4102
+39 ParaHippocampal_L 4111
+40 ParaHippocampal_R 4112
+41 Amygdala_L 4201
+42 Amygdala_R 4202
+43 Calcarine_L 5001
+44 Calcarine_R 5002
+45 Cuneus_L 5011
+46 Cuneus_R 5012
+47 Lingual_L 5021
+48 Lingual_R 5022
+49 Occipital_Sup_L 5101
+50 Occipital_Sup_R 5102
+51 Occipital_Mid_L 5201
+52 Occipital_Mid_R 5202
+53 Occipital_Inf_L 5301
+54 Occipital_Inf_R 5302
+55 Fusiform_L 5401
+56 Fusiform_R 5402
+57 Postcentral_L 6001
+58 Postcentral_R 6002
+59 Parietal_Sup_L 6101
+60 Parietal_Sup_R 6102
+61 Parietal_Inf_L 6201
+62 Parietal_Inf_R 6202
+63 SupraMarginal_L 6211
+64 SupraMarginal_R 6212
+65 Angular_L 6221
+66 Angular_R 6222
+67 Precuneus_L 6301
+68 Precuneus_R 6302
+69 Paracentral_Lobule_L 6401
+70 Paracentral_Lobule_R 6402
+71 Caudate_L 7001
+72 Caudate_R 7002
+73 Putamen_L 7011
+74 Putamen_R 7012
+75 Pallidum_L 7021
+76 Pallidum_R 7022
+77 Thalamus_L 7101
+78 Thalamus_R 7102
+79 Heschl_L 8101
+80 Heschl_R 8102
+81 Temporal_Sup_L 8111
+82 Temporal_Sup_R 8112
+83 Temporal_Pole_Sup_L 8121
+84 Temporal_Pole_Sup_R 8122
+85 Temporal_Mid_L 8201
+86 Temporal_Mid_R 8202
+87 Temporal_Pole_Mid_L 8211
+88 Temporal_Pole_Mid_R 8212
+89 Temporal_Inf_L 8301
+90 Temporal_Inf_R 8302
+91 Cerebelum_Crus1_L 9001
+92 Cerebelum_Crus1_R 9002
+93 Cerebelum_Crus2_L 9011
+94 Cerebelum_Crus2_R 9012
+95 Cerebelum_3_L 9021
+96 Cerebelum_3_R 9022
+97 Cerebelum_4_5_L 9031
+98 Cerebelum_4_5_R 9032
+99 Cerebelum_6_L 9041
+100 Cerebelum_6_R 9042
+101 Cerebelum_7b_L 9051
+102 Cerebelum_7b_R 9052
+103 Cerebelum_8_L 9061
+104 Cerebelum_8_R 9062
+105 Cerebelum_9_L 9071
+106 Cerebelum_9_R 9072
+107 Cerebelum_10_L 9081
+108 Cerebelum_10_R 9082
+109 Vermis_1_2 9100
+110 Vermis_3 9110
+111 Vermis_4_5 9120
+112 Vermis_6 9130
+113 Vermis_7 9140
+114 Vermis_8 9150
+115 Vermis_9 9160
+116 Vermis_10 9170
+```
+
+**/data/extra/hlemaitre/aal/raw/aal_cortical_subcortical/AAL1_116_cortex.ctab**:  
+```
+1 Precentral_L 204 204 204 0
+2 Precentral_R 204 204 204 0
+3 Frontal_Sup_L 203 149 149 0
+4 Frontal_Sup_R 203 149 149 0
+5 Frontal_Sup_Orb_L 61 61 203 0
+6 Frontal_Sup_Orb_R 61 61 203 0
+7 Frontal_Mid_L 0 203 0 0
+8 Frontal_Mid_R 0 203 0 0
+9 Frontal_Mid_Orb_L 162 0 54 0
+10 Frontal_Mid_Orb_R 162 0 54 0
+11 Frontal_Inf_Oper_L 162 54 13 0
+12 Frontal_Inf_Oper_R 162 54 13 0
+13 Frontal_Inf_Tri_L 0 94 92 0
+14 Frontal_Inf_Tri_R 0 94 92 0
+15 Frontal_Inf_Orb_L 203 203 3 0
+16 Frontal_Inf_Orb_R 203 203 3 0
+17 Rolandic_Oper_L 162 0 56 0
+18 Rolandic_Oper_R 162 0 56 0
+19 Supp_Motor_Area_L 162 81 203 0
+20 Supp_Motor_Area_R 162 81 203 0
+21 Olfactory_L 1 1 1 0
+22 Olfactory_R 1 1 1 0
+23 Frontal_Sup_Medial_L 2 2 2 0
+24 Frontal_Sup_Medial_R 2 2 2 0
+25 Frontal_Med_Orb_L 3 3 3 0
+26 Frontal_Med_Orb_R 3 3 3 0
+27 Rectus_L 4 4 4 0
+28 Rectus_R 4 4 4 0
+29 Insula_L 5 5 5 0
+30 Insula_R 5 5 5 0
+31 Cingulum_Ant_L 203 203 108 0
+32 Cingulum_Ant_R 203 203 108 0
+33 Cingulum_Mid_L 198 198 2 0
+34 Cingulum_Mid_R 198 198 2 0
+35 Cingulum_Post_L 184 148 39 0
+36 Cingulum_Post_R 184 148 39 0
+37 Hippocampus_L 203 203 0 0
+38 Hippocampus_R 203 203 0 0
+39 ParaHippocampal_L 13 176 67 0
+40 ParaHippocampal_R 13 176 67 0
+41 Amygdala_L 203 142 203 0
+42 Amygdala_R 203 142 203 0
+43 Calcarine_L 0 152 64 0
+44 Calcarine_R 0 152 64 0
+45 Cuneus_L 54 54 203 0
+46 Cuneus_R 54 54 203 0
+47 Lingual_L 149 203 203 0
+48 Lingual_R 149 203 203 0
+49 Occipital_Sup_L 140 36 42 0
+50 Occipital_Sup_R 140 36 42 0
+51 Occipital_Mid_L 152 69 47 0
+52 Occipital_Mid_R 152 69 47 0
+53 Occipital_Inf_L 94 69 54 0
+54 Occipital_Inf_R 94 69 54 0
+55 Fusiform_L 38 0 83 0
+56 Fusiform_R 38 0 83 0
+57 Postcentral_L 81 0 176 0
+58 Postcentral_R 81 0 176 0
+59 Parietal_Sup_L 76 47 127 0
+60 Parietal_Sup_R 76 47 127 0
+61 Parietal_Inf_L 0 135 203 0
+62 Parietal_Inf_R 0 135 203 0
+63 SupraMarginal_L 6 6 6 0
+64 SupraMarginal_R 6 6 6 0
+65 Angular_L 94 13 13 0
+66 Angular_R 94 13 13 0
+67 Precuneus_L 94 0 26 0
+68 Precuneus_R 94 0 26 0
+69 Paracentral_Lobule_L 122 203 67 0
+70 Paracentral_Lobule_R 122 203 67 0
+79 Heschl_L 128 102 0 0
+80 Heschl_R 128 102 0 0
+81 Temporal_Sup_L 203 53 0 0
+82 Temporal_Sup_R 203 53 0 0
+83 Temporal_Pole_Sup_L 191 23 23 0
+84 Temporal_Pole_Sup_R 191 23 23 0
+85 Temporal_Mid_L 0 200 203 0
+86 Temporal_Mid_R 0 200 203 0
+87 Temporal_Pole_Mid_L 108 0 162 0
+88 Temporal_Pole_Mid_R 108 0 162 0
+89 Temporal_Inf_L 0 200 0 0
+90 Temporal_Inf_R 0 200 0 0
+```
+
+**/data/extra/hlemaitre/aal/raw/aal_cortical_subcortical/AAL1_116_sub.ctab**:  
+```
+71 Caudate_L 122 203 67 0
+72 Caudate_R 122 203 67 0
+73 Putamen_L 72 72 200 0
+74 Putamen_R 72 72 200 0
+75 Pallidum_L 203 102 0 0
+76 Pallidum_R 203 102 0 0
+77 Thalamus_L 0 203 203 0
+78 Thalamus_R 0 203 203 0
+91 Cerebelum_Crus1_L 134 53 0 0
+92 Cerebelum_Crus1_R 134 53 0 0
+93 Cerebelum_Crus2_L 102 102 102 0
+94 Cerebelum_Crus2_R 102 102 102 0
+95 Cerebelum_3_L 8 8 8 0
+96 Cerebelum_3_R 8 8 8 0
+97 Cerebelum_4_5_L 203 149 149 0
+98 Cerebelum_4_5_R 203 149 149 0
+99 Cerebelum_6_L 61 61 203 0
+100 Cerebelum_6_R 61 61 203 0
+101 Cerebelum_7b_L 0 203 0 0
+102 Cerebelum_7b_R 0 203 0 0
+103 Cerebelum_8_L 162 0 54 0
+104 Cerebelum_8_R 162 0 54 0
+105 Cerebelum_9_L 162 54 13 0
+106 Cerebelum_9_R 162 54 13 0
+107 Cerebelum_10_L 0 94 92 0
+108 Cerebelum_10_R 0 94 92 0
+109 Vermis_1_2 11 11 11 0
+110 Vermis_3 12 12 12 0
+111 Vermis_4_5 13 13 13 0
+112 Vermis_6 14 14 14 0
+113 Vermis_7 15 15 15 0
+114 Vermis_8 16 16 16 0
+115 Vermis_9 17 17 17 0
+116 Vermis_10 18 18 18 0
+```
+
+## 5. Projecting  cortical labels
+
+- Project AAL3 parcellation on the cortical colins surface.  
+- After testing, projecting using projfrac 0.1 seems a reasonable compromise.  
+
+### a. AAL3 
+
+```{bash, eval=F}
+################################################################################
+
+module load fsl/6.0.7
+module load Freesurfer/8.1.0
+source $FREESURFER_HOME/SetUpFreeSurfer.sh
+export SUBJECTS_DIR=/data/extra/hlemaitre/aal/freesurfer
+
+AAL3=AAL3v1
+AAL3DIR="/data/extra/hlemaitre/aal/raw/aal3_cortical_subcortical/"
+AAL3OUT_L=${AAL3DIR}${AAL3}_cortex_L.nii.gz
+AAL3OUT_R=${AAL3DIR}${AAL3}_cortex_R.nii.gz
+
+SUBJ=colin27_t1_tal_lin_reg
+
+CTAB=${AAL3DIR}${AAL3}_cortex.ctab
+
+SURF_MGH_LH="$SUBJECTS_DIR/$SUBJ/surf/lh.${AAL3}.mgh"
+OUTDIR_NUM_LH="$SUBJECTS_DIR/$SUBJ/label/${AAL3}_num_lh"
+OUTDIR_NAM_LH="$SUBJECTS_DIR/$SUBJ/label/${AAL3}_lh"
+
+SURF_MGH_RH="$SUBJECTS_DIR/$SUBJ/surf/rh.${AAL3}.mgh"
+OUTDIR_NUM_RH="$SUBJECTS_DIR/$SUBJ/label/${AAL3}_num_rh"
+OUTDIR_NAM_RH="$SUBJECTS_DIR/$SUBJ/label/${AAL3}_rh"
+
+# Create label folders
+mkdir -p "$OUTDIR_NUM_LH" "$OUTDIR_NAM_LH" "$OUTDIR_NUM_RH" "$OUTDIR_NAM_RH"
+
+# project AAL3 volume to left surface
+mri_vol2surf \
+  --src $AAL3OUT_L \
+  --regheader $SUBJ \
+  --hemi lh \
+  --surf white \
+   --projfrac 0.1 \
+  --interp nearest \
+  --out $SURF_MGH_LH
+
+# Reporting segmentation
+mri_segstats --seg $SURF_MGH_LH --sum segstats.txt
+# N = 46 (45 + background)
+
+# Extract numeric labels for the left hemisphere
+for id in $(seq 1 170); do
+  mri_vol2label \
+    --i "$SURF_MGH_LH" \
+    --surf "$SUBJ" lh white \
+    --id "$id" \
+    --l "$OUTDIR_NUM_LH/lh.${AAL3}_${id}.label"
+done
+ls $OUTDIR_NUM_LH/ | wc
+# N = 45
+
+# rename left labels
+while read -r id name r g b a; do
+    src="$OUTDIR_NUM_LH/lh.${AAL3}_${id}.label"
+    dst="$OUTDIR_NAM_LH/lh.${name}.label"
+    if [ -f "$src" ] && [ "$(wc -l < "$src")" -gt 2 ]; then
+      cp "$src" "$dst"
+    fi
+  done < <(awk 'NF>=6 && $1 ~ /^[0-9]+$/ {print $1,$2,$3,$4,$5,$6}' "$CTAB")
+
+# project AAL3 volume to right surface
+mri_vol2surf \
+  --src $AAL3OUT_R \
+  --regheader $SUBJ \
+  --hemi rh \
+  --surf white \
+   --projfrac 0.1 \
+  --interp nearest \
+  --out $SURF_MGH_RH
+
+# Reporting segmentation
+mri_segstats --seg $SURF_MGH_RH --sum segstats.txt
+# N = 46 (45 + background)
+
+# Extract numeric labels for the right hemisphere
+for id in $(seq 1 170); do
+  mri_vol2label \
+    --i "$SURF_MGH_RH" \
+    --surf "$SUBJ" rh white \
+    --id "$id" \
+    --l "$OUTDIR_NUM_RH/rh.${AAL3}_${id}.label"
+done
+ls $OUTDIR_NUM_RH/ | wc
+# N = 45
+
+# rename right labels
+while read -r id name r g b a; do
+    src="$OUTDIR_NUM_RH/rh.${AAL3}_${id}.label"
+    dst="$OUTDIR_NAM_RH/rh.${name}.label"
+    if [ -f "$src" ] && [ "$(wc -l < "$src")" -gt 2 ]; then
+      cp "$src" "$dst"
+    fi
+  done < <(awk 'NF>=6 && $1 ~ /^[0-9]+$/ {print $1,$2,$3,$4,$5,$6}' "$CTAB")
+  
+################################################################################
+```
+
+- Creating annotation files:  
+
+```{bash, eval=F}
+################################################################################
+
+# left hemisphere
+mris_label2annot \
+    --s "$SUBJ" \
+    --h  lh \
+    --a ${AAL3} \
+    --ctab "$CTAB" \
+    --ldir "$OUTDIR_NAM_LH" \
+    --nhits "$SUBJECTS_DIR/$SUBJ/label/lh.${AAL3}.nhits.mgh"
+# Found 10095 unmapped vertices out of 169628
+
+
+# right hemisphere
+mris_label2annot \
+    --s "$SUBJ" \
+    --h  rh \
+    --a ${AAL3} \
+    --ctab "$CTAB" \
+    --ldir "$OUTDIR_NAM_RH" \
+    --nhits "$SUBJECTS_DIR/$SUBJ/label/rh.${AAL3}.nhits.mgh"
+# Found 10076 unmapped vertices out of 168312
+
+################################################################################
+```
+
+### b. AAL2
+
+```{bash, eval=F}
+################################################################################
+
+module load fsl/6.0.7
+module load Freesurfer/8.1.0
+source $FREESURFER_HOME/SetUpFreeSurfer.sh
+export SUBJECTS_DIR=/data/extra/hlemaitre/aal/freesurfer
+
+AAL2=aal2
+AAL2DIR="/data/extra/hlemaitre/aal/raw/aal2_cortical_subcortical/"
+AAL2OUT_L=${AAL2DIR}${AAL2}_cortex_L.nii.gz
+AAL2OUT_R=${AAL2DIR}${AAL2}_cortex_R.nii.gz
+
+SUBJ=colin27_t1_tal_lin_reg
+
+CTAB=${AAL2DIR}${AAL2}_cortex.ctab
+
+SURF_MGH_LH="$SUBJECTS_DIR/$SUBJ/surf/lh.${AAL2}.mgh"
+OUTDIR_NUM_LH="$SUBJECTS_DIR/$SUBJ/label/${AAL2}_num_lh"
+OUTDIR_NAM_LH="$SUBJECTS_DIR/$SUBJ/label/${AAL2}_lh"
+
+SURF_MGH_RH="$SUBJECTS_DIR/$SUBJ/surf/rh.${AAL2}.mgh"
+OUTDIR_NUM_RH="$SUBJECTS_DIR/$SUBJ/label/${AAL2}_num_rh"
+OUTDIR_NAM_RH="$SUBJECTS_DIR/$SUBJ/label/${AAL2}_rh"
+
+# Create label folders
+mkdir -p "$OUTDIR_NUM_LH" "$OUTDIR_NAM_LH" "$OUTDIR_NUM_RH" "$OUTDIR_NAM_RH"
+
+# project AAL2 volume to left surface
+mri_vol2surf \
+  --src $AAL2OUT_L \
+  --regheader $SUBJ \
+  --hemi lh \
+  --surf white \
+   --projfrac 0.1 \
+  --interp nearest \
+  --out $SURF_MGH_LH
+
+# Reporting segmentation
+mri_segstats --seg $SURF_MGH_LH --sum segstats.txt
+# N = 44 (43 + background)
+
+# Extract numeric labels for the left hemisphere
+for id in $(seq 1 120); do
+  mri_vol2label \
+    --i "$SURF_MGH_LH" \
+    --surf "$SUBJ" lh white \
+    --id "$id" \
+    --l "$OUTDIR_NUM_LH/lh.${AAL2}_${id}.label"
+done
+ls $OUTDIR_NUM_LH/ | wc
+# N = 43
+
+# rename left labels
+while read -r id name r g b a; do
+    src="$OUTDIR_NUM_LH/lh.${AAL2}_${id}.label"
+    dst="$OUTDIR_NAM_LH/lh.${name}.label"
+    if [ -f "$src" ] && [ "$(wc -l < "$src")" -gt 2 ]; then
+      cp "$src" "$dst"
+    fi
+  done < <(awk 'NF>=6 && $1 ~ /^[0-9]+$/ {print $1,$2,$3,$4,$5,$6}' "$CTAB")
+
+# project AAL2 volume to right surface
+mri_vol2surf \
+  --src $AAL2OUT_R \
+  --regheader $SUBJ \
+  --hemi rh \
+  --surf white \
+   --projfrac 0.1 \
+  --interp nearest \
+  --out $SURF_MGH_RH
+
+# Reporting segmentation
+mri_segstats --seg $SURF_MGH_RH --sum segstats.txt
+# N = 44 (43 + background)
+
+# Extract numeric labels for the right hemisphere
+for id in $(seq 1 120); do
+  mri_vol2label \
+    --i "$SURF_MGH_RH" \
+    --surf "$SUBJ" rh white \
+    --id "$id" \
+    --l "$OUTDIR_NUM_RH/rh.${AAL2}_${id}.label"
+done
+ls $OUTDIR_NUM_RH/ | wc
+# N = 43
+
+# rename right labels
+while read -r id name r g b a; do
+    src="$OUTDIR_NUM_RH/rh.${AAL2}_${id}.label"
+    dst="$OUTDIR_NAM_RH/rh.${name}.label"
+    if [ -f "$src" ] && [ "$(wc -l < "$src")" -gt 2 ]; then
+      cp "$src" "$dst"
+    fi
+  done < <(awk 'NF>=6 && $1 ~ /^[0-9]+$/ {print $1,$2,$3,$4,$5,$6}' "$CTAB")
+  
+################################################################################
+```
+
+- Creating annotation files:  
+
+```{bash, eval=F}
+################################################################################
+
+# left hemisphere
+mris_label2annot \
+    --s "$SUBJ" \
+    --h  lh \
+    --a ${AAL2} \
+    --ctab "$CTAB" \
+    --ldir "$OUTDIR_NAM_LH" \
+    --nhits "$SUBJECTS_DIR/$SUBJ/label/lh.${AAL2}.nhits.mgh"
+# Found 10106 unmapped vertices out of 169628
+
+# right hemisphere
+mris_label2annot \
+    --s "$SUBJ" \
+    --h  rh \
+    --a ${AAL2} \
+    --ctab "$CTAB" \
+    --ldir "$OUTDIR_NAM_RH" \
+    --nhits "$SUBJECTS_DIR/$SUBJ/label/rh.${AAL2}.nhits.mgh"
+# Found 10074 unmapped vertices out of 168312
+
+################################################################################
+```
+
+### c. AAL1
+
+```{bash, eval=F}
+################################################################################
+
+module load fsl/6.0.7
+module load Freesurfer/8.1.0
+source $FREESURFER_HOME/SetUpFreeSurfer.sh
+export SUBJECTS_DIR=/data/extra/hlemaitre/aal/freesurfer
+
+AAL1=AAL1_116
+AAL1DIR="/data/extra/hlemaitre/aal/raw/aal_cortical_subcortical/"
+AAL1OUT_L=${AAL1DIR}${AAL1}_cortex_L.nii.gz
+AAL1OUT_R=${AAL1DIR}${AAL1}_cortex_R.nii.gz
+
+SUBJ=colin27_t1_tal_lin_reg
+
+CTAB=${AAL1DIR}${AAL1}_cortex.ctab
+
+SURF_MGH_LH="$SUBJECTS_DIR/$SUBJ/surf/lh.${AAL1}.mgh"
+OUTDIR_NUM_LH="$SUBJECTS_DIR/$SUBJ/label/${AAL1}_num_lh"
+OUTDIR_NAM_LH="$SUBJECTS_DIR/$SUBJ/label/${AAL1}_lh"
+
+SURF_MGH_RH="$SUBJECTS_DIR/$SUBJ/surf/rh.${AAL1}.mgh"
+OUTDIR_NUM_RH="$SUBJECTS_DIR/$SUBJ/label/${AAL1}_num_rh"
+OUTDIR_NAM_RH="$SUBJECTS_DIR/$SUBJ/label/${AAL1}_rh"
+
+# Create label folders
+mkdir -p "$OUTDIR_NUM_LH" "$OUTDIR_NAM_LH" "$OUTDIR_NUM_RH" "$OUTDIR_NAM_RH"
+
+# project AAL1 volume to left surface
+mri_vol2surf \
+  --src $AAL1OUT_L \
+  --regheader $SUBJ \
+  --hemi lh \
+  --surf white \
+   --projfrac 0.1 \
+  --interp nearest \
+  --out $SURF_MGH_LH
+
+# Reporting segmentation
+mri_segstats --seg $SURF_MGH_LH --sum segstats.txt
+# N = 42 (41 + background)
+
+# Extract numeric labels for the left hemisphere
+for id in $(seq 1 116); do
+  mri_vol2label \
+    --i "$SURF_MGH_LH" \
+    --surf "$SUBJ" lh white \
+    --id "$id" \
+    --l "$OUTDIR_NUM_LH/lh.${AAL1}_${id}.label"
+done
+ls $OUTDIR_NUM_LH/ | wc
+# N = 41
+
+# rename left labels
+while read -r id name r g b a; do
+    src="$OUTDIR_NUM_LH/lh.${AAL1}_${id}.label"
+    dst="$OUTDIR_NAM_LH/lh.${name}.label"
+    if [ -f "$src" ] && [ "$(wc -l < "$src")" -gt 2 ]; then
+      cp "$src" "$dst"
+    fi
+  done < <(awk 'NF>=6 && $1 ~ /^[0-9]+$/ {print $1,$2,$3,$4,$5,$6}' "$CTAB")
+
+# project AAL1 volume to right surface
+mri_vol2surf \
+  --src $AAL1OUT_R \
+  --regheader $SUBJ \
+  --hemi rh \
+  --surf white \
+   --projfrac 0.1 \
+  --interp nearest \
+  --out $SURF_MGH_RH
+
+# Reporting segmentation
+mri_segstats --seg $SURF_MGH_RH --sum segstats.txt
+# N = 42 (41 + background)
+
+# Extract numeric labels for the right hemisphere
+for id in $(seq 1 116); do
+  mri_vol2label \
+    --i "$SURF_MGH_RH" \
+    --surf "$SUBJ" rh white \
+    --id "$id" \
+    --l "$OUTDIR_NUM_RH/rh.${AAL1}_${id}.label"
+done
+ls $OUTDIR_NUM_RH/ | wc
+# N = 41
+
+# rename right labels
+while read -r id name r g b a; do
+    src="$OUTDIR_NUM_RH/rh.${AAL1}_${id}.label"
+    dst="$OUTDIR_NAM_RH/rh.${name}.label"
+    if [ -f "$src" ] && [ "$(wc -l < "$src")" -gt 2 ]; then
+      cp "$src" "$dst"
+    fi
+  done < <(awk 'NF>=6 && $1 ~ /^[0-9]+$/ {print $1,$2,$3,$4,$5,$6}' "$CTAB")
+
+################################################################################
+```
+
+- Creating annotation files:  
+
+```{bash, eval=F}
+################################################################################
+
+# left hemisphere
+mris_label2annot \
+    --s "$SUBJ" \
+    --h  lh \
+    --a ${AAL1} \
+    --ctab "$CTAB" \
+    --ldir "$OUTDIR_NAM_LH" \
+    --nhits "$SUBJECTS_DIR/$SUBJ/label/lh.${AAL1}.nhits.mgh"
+# Found 10086 unmapped vertices out of 169628
+
+
+# right hemisphere
+mris_label2annot \
+    --s "$SUBJ" \
+    --h  rh \
+    --a ${AAL1} \
+    --ctab "$CTAB" \
+    --ldir "$OUTDIR_NAM_RH" \
+    --nhits "$SUBJECTS_DIR/$SUBJ/label/rh.${AAL1}.nhits.mgh"
+# Found 10074 unmapped vertices out of 168312
+
+################################################################################
+```
+
+## 6. Cortical morphological operations 
+
+Different morphological operations to closes holes and smooth borders of the labels.   
+Notes: Background is -1 in freesurfer.  
+
+Recipe:  
+1. border smooth  
+2. remove isolated island  
+3. close background hole  
+
+Notes: Part of the OFClat_L is replaced by Frontal_Mid_2_L 
+
+```{bash, eval=F}
+################################################################################
+
+conda create -n meshing python=3.10
+conda activate meshing
+pip install nibabel
+pip install numpy
+pip install skimage
+pip install trimesh
+
+conda activate meshing
+ipython 
+
+################################################################################
+```
+
+Python functions:  
+```{python, eval=F}
+################################################################################
+
+import numpy as np
+from nibabel.freesurfer.io import read_annot, write_annot, read_geometry
+from collections import deque
+
+# Build vertex neighbors (mesh adjacency)
+def mesh_neighbors(n_verts, faces):
+    neigh = [set() for _ in range(n_verts)]
+    for tri in faces:
+        a, b, c = tri
+        neigh[a].update([b, c])
+        neigh[b].update([a, c])
+        neigh[c].update([a, b])
+    return [np.fromiter(s, dtype=np.int64) for s in neigh]
+
+# Border smooth
+# This keeps interiors unchanged and only rounds jagged edges.
+def border_smooth(labels, neigh, n_iter=3, background=-1, keep_background=False,majority=0.60, min_votes=3):
+    lab = labels.copy()
+    for _ in range(n_iter):
+        new = lab.copy()
+        # boundary vertices = at least one neighbor with different label
+        is_boundary = np.zeros(lab.size, dtype=bool)
+        for v, nb in enumerate(neigh):
+            if nb.size == 0:
+                continue
+            is_boundary[v] = np.any(lab[nb] != lab[v])
+        for v in np.where(is_boundary)[0]:
+            vals = lab[neigh[v]]
+
+            if not keep_background:
+                vals = vals[vals != background]
+                if vals.size == 0:
+                    continue
+            # include self-label to stabilize borders
+            vals = np.r_[vals, lab[v]]
+            uniq, cnt = np.unique(vals, return_counts=True)
+            k = np.argmax(cnt)
+            winner, votes = uniq[k], cnt[k]
+            # conservative update: only if strong agreement
+            if votes >= max(min_votes, int(np.ceil(majority * vals.size))):
+                new[v] = winner
+        if np.array_equal(new, lab):
+            break
+        lab = new
+    return lab
+
+# only the biggest component per label
+def keep_largest_component_per_label(labels, neigh, background=-1):
+    lab = labels.copy()
+    n = lab.size
+
+    # Process each label separately
+    for L in np.unique(lab):
+        if L == background:
+            continue
+
+        # find all components of label L
+        visited = np.zeros(n, dtype=bool)
+        comps = []
+
+        for seed in np.where(lab == L)[0]:
+            if visited[seed]:
+                continue
+            # BFS for this component
+            stack = [int(seed)]
+            visited[seed] = True
+            comp = []
+
+            while stack:
+                v = stack.pop()
+                if lab[v] != L:
+                    continue
+                comp.append(v)
+                for u in neigh[v]:
+                    u = int(u)
+                    if not visited[u] and lab[u] == L:
+                        visited[u] = True
+                        stack.append(u)
+
+            if comp:
+                comps.append(comp)
+
+        if len(comps) <= 1:
+            continue
+
+        # keep only the biggest component
+        comps.sort(key=len, reverse=True)
+        keep = set(comps[0])
+
+        # relabel the other components using dominant boundary neighbor label
+        for comp in comps[1:]:
+            comp_set = set(comp)
+
+            boundary_neighbor_labels = []
+            for v in comp:
+                nb = neigh[v]
+                out = nb[~np.isin(nb, list(comp_set))]
+                if out.size:
+                    boundary_neighbor_labels.append(lab[out])
+
+            if not boundary_neighbor_labels:
+                continue
+
+            boundary_neighbor_labels = np.concatenate(boundary_neighbor_labels)
+            boundary_neighbor_labels = boundary_neighbor_labels[
+                (boundary_neighbor_labels != background) & (boundary_neighbor_labels != L)
+            ]
+            if boundary_neighbor_labels.size == 0:
+                lab[np.array(comp, dtype=int)] = background
+                continue
+
+            uniq, cnt = np.unique(boundary_neighbor_labels, return_counts=True)
+            newL = uniq[np.argmax(cnt)]
+            lab[np.array(comp, dtype=int)] = newL
+
+    return lab
+
+# Close small background holes
+def voronoi_fill_background_limited(labels, neigh, background=-1, max_dist=5):
+    lab = labels.copy()
+    n = lab.size
+
+    dist = np.full(n, -1, dtype=np.int32)
+    out  = lab.copy()
+
+    q = deque()
+
+    # initialize queue with non-background vertices
+    for v in np.where(lab != background)[0]:
+        dist[v] = 0
+        q.append(int(v))
+
+    # multi-source BFS with distance limit
+    while q:
+        v = q.popleft()
+        if dist[v] >= max_dist:
+            continue
+
+        for u in neigh[v]:
+            u = int(u)
+            if dist[u] == -1 and lab[u] == background:
+                dist[u] = dist[v] + 1
+                out[u] = out[v]
+                q.append(u)
+
+    return out
+  
+################################################################################
+```
+
+### a. AAL3
+
+Python final AAL3 recipe:  
+```{python, eval=F}
+################################################################################
+
+aalversion = "AAL3v1"
+
+fsdir = "/data/extra/hlemaitre/aal/freesurfer/colin27_t1_tal_lin_reg"
+
+# left hemisphere
+
+# read original annot and white surface
+labels, ctab, names = read_annot(
+    f"{fsdir}/label/lh.{aalversion}.annot"
+)
+verts, faces = read_geometry(
+    f"{fsdir}/surf/lh.white"
+)
+
+# smoothing
+neigh = mesh_neighbors(len(labels), faces)
+labels_border = border_smooth(
+    labels, neigh, n_iter=10, background=-1, majority=0.5
+)
+
+# keep biggest ones
+neigh_border = mesh_neighbors(len(labels_border), faces)
+labels_keep = keep_largest_component_per_label(
+    labels_border, neigh_border, background=-1
+)
+
+# closing holes
+neigh_keep = mesh_neighbors(len(labels_keep), faces)
+labels_fill = voronoi_fill_background_limited(
+    labels_keep, neigh_keep, background=-1, max_dist=5
+)
+
+write_annot(
+    f"{fsdir}/label/lh.{aalversion}_recipe.annot",
+    labels_fill, ctab, names
+)
+
+
+# right hemisphere
+
+# read original annot and white surface
+labels, ctab, names = read_annot(
+    f"{fsdir}/label/rh.{aalversion}.annot"
+)
+verts, faces = read_geometry(
+    f"{fsdir}/surf/rh.white"
+)
+
+# smoothing
+neigh = mesh_neighbors(len(labels), faces)
+labels_border = border_smooth(
+    labels, neigh, n_iter=10, background=-1, majority=0.5
+)
+
+# keep biggest ones
+neigh_border = mesh_neighbors(len(labels_border), faces)
+labels_keep = keep_largest_component_per_label(
+    labels_border, neigh_border, background=-1
+)
+
+# closing holes
+neigh_keep = mesh_neighbors(len(labels_keep), faces)
+labels_fill = voronoi_fill_background_limited(
+    labels_keep, neigh_keep, background=-1, max_dist=5
+)
+
+write_annot(
+    f"{fsdir}/label/rh.{aalversion}_recipe.annot",
+    labels_fill, ctab, names
+)
+
+################################################################################
+```
+
+### b. AAL2
+
+Python final AAL2 recipe:  
+```{python, eval=F}
+################################################################################
+
+aalversion = "aal2"
+
+fsdir = "/data/extra/hlemaitre/aal/freesurfer/colin27_t1_tal_lin_reg"
+
+# left hemisphere
+
+# read original annot and white surface
+labels, ctab, names = read_annot(
+    f"{fsdir}/label/lh.{aalversion}.annot"
+)
+verts, faces = read_geometry(
+    f"{fsdir}/surf/lh.white"
+)
+
+# smoothing
+neigh = mesh_neighbors(len(labels), faces)
+labels_border = border_smooth(
+    labels, neigh, n_iter=10, background=-1, majority=0.5
+)
+
+# keep biggest ones
+neigh_border = mesh_neighbors(len(labels_border), faces)
+labels_keep = keep_largest_component_per_label(
+    labels_border, neigh_border, background=-1
+)
+
+# closing holes
+neigh_keep = mesh_neighbors(len(labels_keep), faces)
+labels_fill = voronoi_fill_background_limited(
+    labels_keep, neigh_keep, background=-1, max_dist=5
+)
+
+write_annot(
+    f"{fsdir}/label/lh.{aalversion}_recipe.annot",
+    labels_fill, ctab, names
+)
+
+
+# right hemisphere
+
+# read original annot and white surface
+labels, ctab, names = read_annot(
+    f"{fsdir}/label/rh.{aalversion}.annot"
+)
+verts, faces = read_geometry(
+    f"{fsdir}/surf/rh.white"
+)
+
+# smoothing
+neigh = mesh_neighbors(len(labels), faces)
+labels_border = border_smooth(
+    labels, neigh, n_iter=10, background=-1, majority=0.5
+)
+
+# keep biggest ones
+neigh_border = mesh_neighbors(len(labels_border), faces)
+labels_keep = keep_largest_component_per_label(
+    labels_border, neigh_border, background=-1
+)
+
+# closing holes
+neigh_keep = mesh_neighbors(len(labels_keep), faces)
+labels_fill = voronoi_fill_background_limited(
+    labels_keep, neigh_keep, background=-1, max_dist=5
+)
+
+write_annot(
+    f"{fsdir}/label/rh.{aalversion}_recipe.annot",
+    labels_fill, ctab, names
+)
+
+################################################################################
+```
+
+### c. AAL1
+
+Python final AAL1 recipe:  
+```{python, eval=F}
+################################################################################
+
+aalversion = "AAL1_116"
+
+fsdir = "/data/extra/hlemaitre/aal/freesurfer/colin27_t1_tal_lin_reg"
+
+# left hemisphere
+
+# read original annot and white surface
+labels, ctab, names = read_annot(
+    f"{fsdir}/label/lh.{aalversion}.annot"
+)
+verts, faces = read_geometry(
+    f"{fsdir}/surf/lh.white"
+)
+
+# smoothing
+neigh = mesh_neighbors(len(labels), faces)
+labels_border = border_smooth(
+    labels, neigh, n_iter=10, background=-1, majority=0.5
+)
+
+# keep biggest ones
+neigh_border = mesh_neighbors(len(labels_border), faces)
+labels_keep = keep_largest_component_per_label(
+    labels_border, neigh_border, background=-1
+)
+
+# closing holes
+neigh_keep = mesh_neighbors(len(labels_keep), faces)
+labels_fill = voronoi_fill_background_limited(
+    labels_keep, neigh_keep, background=-1, max_dist=5
+)
+
+write_annot(
+    f"{fsdir}/label/lh.{aalversion}_recipe.annot",
+    labels_fill, ctab, names
+)
+
+# right hemisphere
+
+# read original annot and white surface
+labels, ctab, names = read_annot(
+    f"{fsdir}/label/rh.{aalversion}.annot"
+)
+verts, faces = read_geometry(
+    f"{fsdir}/surf/rh.white"
+)
+
+# smoothing
+neigh = mesh_neighbors(len(labels), faces)
+labels_border = border_smooth(
+    labels, neigh, n_iter=10, background=-1, majority=0.5
+)
+
+# keep biggest ones
+neigh_border = mesh_neighbors(len(labels_border), faces)
+labels_keep = keep_largest_component_per_label(
+    labels_border, neigh_border, background=-1
+)
+
+# closing holes
+neigh_keep = mesh_neighbors(len(labels_keep), faces)
+labels_fill = voronoi_fill_background_limited(
+    labels_keep, neigh_keep, background=-1, max_dist=5
+)
+
+write_annot(
+    f"{fsdir}/label/rh.{aalversion}_recipe.annot",
+    labels_fill, ctab, names
+)
+
+################################################################################
+```
+
+## 7. ggseg procedure
+
+Atlas creation with the ggseg.extra package:  
+https://ggsegverse.github.io/ggseg.extra/ 
+
+### a. Set environment
+
+```{bash, eval=F}
+################################################################################
+# create conda environment (only once)
+
+conda create -n ggseg python=3.10
+conda activate ggseg
+
+# R version
+conda install -c conda-forge r-base=4.4
+
+# ggseg.extra dependencies
+conda install -c conda-forge \
+  udunits2 \
+  r-units \
+  r-sf \
+  r-rmapshaper \
+  openssl \
+  r-terra \
+  freetype \
+  fontconfig \
+  harfbuzz \
+  fribidi \
+  pkg-config \
+  r-pkgdown
+  
+################################################################################
+module load fsl/6.0.7
+module load Freesurfer/8.1.0
+export SUBJECTS_DIR=/data/extra/hlemaitre/aal/freesurfer
+
+conda activate ggseg
+
+# rstudio
+alias rstudio='/srv/shares/softs/rstudio-2026.01.0+392/rstudio --disable-gpu'
+
+################################################################################
+```
+
+### b. R packages
+
+```{r, eval=F}
+################################################################################
+# Packages for R-4.4.3
+
+options(
+  repos = c(
+    ggsegverse = "https://ggsegverse.r-universe.dev",
+    CRAN = "https://cloud.r-project.org"
+  )
+)
+
+install.packages("ggseg")
+install.packages("ggseg3d")
+install.packages("ggseg.formats")
+install.packages("ggseg.extra")
+install.packages("ggseg.docs")
+install.packages("quarto")
+install.packages("nanonext")
+
+install.packages("pak")
+pak::pak("muschellij2/freesurfer")
+pak::pak("ggsegverse/ggseg.docs")
+
+################################################################################
+```
+
+### c. Scripts
+
+00_config.R
+01_cortical.R
+02_basal_ganglia.R
+03_cerebellum.R
+04_package.R
+
+### d. Testing
+
+```{r, eval=F}
+################################################################################
+
+devtools::load_all(
+  "/data/extra/hlemaitre/aal/ggsegAal"
+)
+
+getNamespaceExports("ggsegAAL")
+
+## Plots -----------------------------------------------------------------------
+
+library(ggplot2)
+
+## 2D
+ggplot() +
+  ggseg::geom_brain(atlas = aal1_cortical()) +
+  theme_void()
+
+ggplot() +
+  ggseg::geom_brain(atlas = aal1_subcortical()) +
+  theme_void()
+
+ggplot() +
+  ggseg::geom_brain(atlas = aal1_cerebellum()) +
+  theme_void()
+
+## 3D
+ggseg3d_aal(aal1_cortical())
+
+ggseg3d_aal(
+  aal1_subcortical(),
+  context = TRUE
+)
+
+ggseg3d_aal(
+  aal1_cerebellum(),
+  context = TRUE
+)
+
+################################################################################
+```
+
+## 8. Package documentation and validation
+
+This section describes how to validate the generated `ggsegAAL` package,
+install it locally, generate the GitHub README, and build the pkgdown website.
+
+The package is built by `04_package.R`. The following operations do not
+rebuild the atlases.
+
+### a. Validate package
+
+Run the automated tests and R CMD check before publication.
+
+```{r package-validation, eval=FALSE}
+pkg <- "/data/extra/hlemaitre/aal/ggsegAal"
+
+devtools::test(pkg)
+devtools::check(pkg)
+```
+
+The tests verify the integrity and expected region counts of the nine
+AAL atlas components.
+
+Expected region counts:
+
+| Atlas | Cortical | Subcortical | Cerebellum | Total |
+|:------|---------:|------------:|-----------:|------:|
+| AAL1  | 82       | 8           | 26         | 116   |
+| AAL2  | 86       | 8           | 26         | 120   |
+| AAL3  | 90       | 50          | 26         | 166   |
+
+### b. Install package locally
+
+Install the newly generated package in the active R library.
+
+```{r package-install, eval=FALSE}
+pkg <- "/data/extra/hlemaitre/aal/ggsegAal"
+
+devtools::install(
+  pkg = pkg,
+  upgrade = FALSE,
+  dependencies = FALSE
+)
+
+library(ggsegAAL)
+
+packageVersion("ggsegAAL")
+find.package("ggsegAAL")
+```
+
+Installation is necessary for the README examples because Quarto executes
+R code in a separate session.
+
+### c. Generate GitHub README
+
+Generate the README.md from README.qmd  
+
+```{r readme-generation, eval=FALSE}
+pkg <- "/data/extra/hlemaitre/aal/ggsegAal"
+
+quarto::quarto_render(
+  input = readme_target,
+  output_format = "gfm"
+)
+```
+
+### d. Build pkgdown website
+
+Build and preview the documentation website:
+
+```{r pkgdown-build, eval=FALSE}
+pkgdown::build_site(
+  pkg,
+  preview = TRUE
+)
+```
+
+The website is generated in:
+
+`/data/extra/hlemaitre/aal/ggsegAal/docs/`
+
+The website uses the `ggseg.docs` template and includes the README,
+package reference pages, and documentation for `ggseg3d_aal()`.
+
+
+## 9. GitHub publication
+
+This section describes how to publish `ggsegAAL` on GitHub and deploy
+the pkgdown website using GitHub Pages.
+
+Repository:
+
+https://github.com/lemaitreh/ggsegAal
+
+Documentation website:
+
+https://lemaitreh.github.io/ggsegAal/
+
+### a. Create GitHub repository
+
+On GitHub, open:
+
+https://github.com/new
+
+Configure:
+
+- Owner: `lemaitreh`
+- Repository name: `ggsegAal`
+- Description: `Automated Anatomical Labeling atlases for ggsegverse`
+- Visibility: **Public**
+
+Do not initialize the repository with a README, `.gitignore`, or license,
+as these files are already managed locally.
+
+Click **Create repository**.
+
+### b. Create GitHub Personal Access Token
+
+On GitHub:
+
+**Settings ? Developer settings ? Personal access tokens
+? Fine-grained tokens ? Generate new token**
+
+Configure:
+
+- Repository access: `Only select repositories`
+- Selected repository: `ggsegAal`
+- Repository permission / Contents: `Read and write`
+- Expiration: according to your preference
+
+Alternatively, a classic token with the `repo` scope can be used.
+
+Save the token securely. It replaces the GitHub account password
+when using Git over HTTPS.
+
+### c. Initialize Git in RStudio
+
+Open the package directory in RStudio:
+
+`/data/extra/hlemaitre/aal/ggsegAal`
+
+Then select:
+
+**Tools ? Version Control ? Project Setup... ? Git**
+
+Alternatively, open the RStudio terminal and run:
+
+```{bash git-init, eval=FALSE}
+cd /data/extra/hlemaitre/aal/ggsegAal
+
+git status
+```
+
+If the directory is not already a Git repository:
+
+```{bash git-init-new, eval=FALSE}
+git init
+git branch -M main
+```
+
+If Git is already initialized, do not run `git init` again.
+Check the current branch with `git branch --show-current`.
+
+### d. Connect the local repository to GitHub
+
+In the RStudio terminal:
+
+```{bash git-remote, eval=FALSE}
+cd /data/extra/hlemaitre/aal/ggsegAal
+
+git remote add origin https://github.com/lemaitreh/ggsegAal.git
+
+git remote -v
+```
+
+If `origin` already exists, update its URL instead:
+
+```{bash git-remote-update, eval=FALSE}
+git remote set-url origin https://github.com/lemaitreh/ggsegAal.git
+```
+
+### e. Commit and push the package
+
+Before publishing, verify that the repository contains no confidential
+data, temporary files, or unnecessary generated outputs.
+
+Also verify that `docs/`, `README.md` and the README figures under
+`man/figures/` are not excluded by `.gitignore`.
+
+In the RStudio terminal:
+
+```{bash git-first-push, eval=FALSE}
+cd /data/extra/hlemaitre/aal/ggsegAal
+
+git add .
+git status
+
+git commit -m "Initial release ggsegAAL 3.0.0"
+
+git push -u origin main
+```
+
+When prompted by GitHub:
+
+- Username: `lemaitreh`
+- Password: paste the GitHub Personal Access Token.
+
+If the repository uses the `master` branch, replace `main` with `master`.
+
+### f. Enable GitHub Pages
+
+On GitHub, open the repository:
+
+https://github.com/lemaitreh/ggsegAal
+
+Navigate to:
+
+**Settings ? Pages ? Build and deployment**
+
+Configure:
+
+- Source: **Deploy from a branch**
+- Branch: `main`
+- Folder: `/docs`
+
+Click **Save**.
+
+Once deployment is complete, the documentation website should be
+available at:
+
+https://lemaitreh.github.io/ggsegAal/
+
+### g. Update the GitHub repository
+
+After changing the README, package documentation or pkgdown website,
+regenerate the affected outputs locally and commit the changes.
+
+In the RStudio terminal:
+
+```{bash git-update, eval=FALSE}
+cd /data/extra/hlemaitre/aal/ggsegAal
+
+git status
+git add .
+git commit -m "Update ggsegAAL documentation"
+git push
+```
+
+A new commit is necessary only when files have actually changed.
+
+### h. Important:

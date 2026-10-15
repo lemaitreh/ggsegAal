@@ -1,0 +1,30 @@
+Package: ggsegAAL
+Title: Automated Anatomical Labeling Atlases for the ggseg Ecosystem
+Version: 3.0.0
+Authors@R: person("Hervé", "Lemaître", email = "herve.lemaitre@u-bordeaux.fr", role = c("aut", "cre"))
+Description: Provides cortical, subcortical and cerebellar representations of the AAL1, AAL2 and AAL3 Automated Anatomical Labeling atlases for the ggseg ecosystem. AAL1 contains 116 regions, AAL2 contains 120 regions, and the AAL3 representation contains 166 regions. Cortical atlases use the Colin27 surface, subcortical atlases include cortical anatomical context, and cerebellar atlases use the SUIT surface and flatmap.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Depends:
+    R (>= 3.5)
+Suggests:
+    ggseg,
+    ggplot2,
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+Remotes:
+    ggsegverse/ggseg
+URL: https://github.com/lemaitreh/ggsegAal
+BugReports: https://github.com/lemaitreh/ggsegAal/issues
+Roxygen: list(markdown = TRUE)
+Config/testthat/edition: 3
+Config/Needs/website: ggsegverse/ggseg.docs
+Config/Needs/lint:
+    dplyr,
+    future,
+    progressr,
+    ggsegverse/ggseg.extra
+Imports: 
+    ggseg3d
+Config/roxygen2/version: 8.1.0
