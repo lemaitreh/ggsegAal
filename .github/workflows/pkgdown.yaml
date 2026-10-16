@@ -1,9 +1,6 @@
 on:
   push:
     branches: [main, master]
-  # Builds on every PR so a broken reference index or vignette fails review
-  # rather than main. The reusable guards its deploy step with
-  # `github.event_name != 'pull_request'`, so PRs build without publishing.
   pull_request:
   release:
     types: [published]
@@ -18,9 +15,8 @@ jobs:
   pkgdown:
     uses: ggsegverse/.github/.github/workflows/pkgdown.yaml@main
     with:
-      # ggseg.docs supplies the shared pkgdown template, declared in
-      # DESCRIPTION as Config/Needs/website.
       extra-packages: |
+        ggsegverse/ggseg.formats
         any::pkgdown
         any::quarto
         local::.
